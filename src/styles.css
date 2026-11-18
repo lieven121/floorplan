@@ -2099,3 +2099,13 @@ table.qty.small {
   color: #4a3b00;
   border-color: #d8b93a;
 }
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

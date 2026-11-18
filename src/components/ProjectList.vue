@@ -41,6 +41,33 @@ watch(() => auth.me?.id, refresh);
 
 const fileIds = fileIdsOf;
 
+/**
+ * A furnished example house (public/demo.floorplan.json), added as a new plan with
+ * a version "Current (as bought)" before the renovation walls, so every feature has
+ * something to show.
+ */
+async function openDemo() {
+  busy.value = 'Loading the demo house…';
+  error.value = '';
+  try {
+    const res = await fetch(new URL('demo.floorplan.json', document.baseURI));
+    if (!res.ok) throw new Error(`The demo house could not be loaded (${res.status}).`);
+    const p = parseProjectFile(await res.text()).project;
+    const now = new Date().toISOString();
+    Object.assign(p, { id: uid(), createdAt: now, updatedAt: now });
+    await target.value.put(p);
+    const before = JSON.parse(JSON.stringify(p)) as Project;
+    for (const f of before.floors) for (const r of f.rooms) for (const w of r.walls) delete w.status;
+    await target.value.putVersion(p.id, 'Current (as bought)', before);
+    await target.value.putVersion(p.id, 'After renovation – draft 1', p);
+    emit('open', p.id, loggedIn.value);
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    busy.value = '';
+  }
+}
+
 async function create() {
   const name = prompt('Name of the plan', 'My house');
   if (!name?.trim()) return;
@@ -157,6 +184,7 @@ const when = (s: string) => new Date(s).toLocaleString();
       <div class="row-actions">
         <button class="btn primary" @click="create">+ New plan</button>
         <button class="btn" @click="fileInput?.click()">Import file…</button>
+        <button class="btn" :disabled="!!busy" title="A furnished example house to try everything on" @click="openDemo">🏠 Try the demo house</button>
         <input ref="fileInput" type="file" accept=".json,application/json" hidden @change="importFile" />
       </div>
       <p v-if="auth.error" class="warn">{{ auth.error }}</p>
@@ -212,6 +240,7 @@ const when = (s: string) => new Date(s).toLocaleString();
         <div v-else class="empty-hint static">
           <p>No plans yet.</p>
           <p>Start a new plan, then add rooms by typing in the walls you measured with your laser meter.</p>
+          <p>Or open the <button class="link-button" @click="openDemo">demo house</button> to look around first.</p>
         </div>
       </template>
 

@@ -27,7 +27,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,json}'],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         // The API and the sign-in redirect must always reach the server.
         navigateFallbackDenylist: [/\/api\//],
