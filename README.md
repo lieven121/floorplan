@@ -2,6 +2,8 @@
 
 A self-hosted web app for measuring and documenting your house. Type in the walls you measured with a laser meter and get a to-scale floor plan, then add doors and windows, furniture, the electrical installation, pipes, finishes and renovation plans. It runs on your phone (installable, works offline) and on a desktop.
 
+**[Try the demo](https://lieven121.github.io/floorplan/)** and tap *Try the demo house*. The demo runs without the server, so plans stay in your browser.
+
 ![The ground floor of a demo house, with floor finishes, a wall to demolish (yellow) and a new wall (red)](docs/screenshots/floor.png)
 
 ## Features
