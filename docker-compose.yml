@@ -21,6 +21,7 @@ services:
       Oidc__ClientId: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID}
       # Expected "aud" of access tokens. Empty = the client id.
       Oidc__Audience: ${OIDC_AUDIENCE:-}
+      # Add offline_access on Authentik, so it gives refresh tokens and you stay signed in.
       Oidc__Scopes: ${OIDC_SCOPES:-openid profile email}
       # Set to false only if the provider's access tokens carry no usable "aud".
       Oidc__ValidateAudience: ${OIDC_VALIDATE_AUDIENCE:-true}

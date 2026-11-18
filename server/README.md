@@ -49,10 +49,33 @@ Settings come from `appsettings.json` or environment variables. In an environmen
 
 ### OIDC provider
 
-Create a **public** client (no secret) that uses Authorization Code with PKCE. Set its redirect URI to the app's URL, and make sure its access tokens are JWTs.
+Register the app with your provider as follows:
 
-- **Authentik:** create an OAuth2/OpenID provider with client type *Public*, and add the scopes `openid`, `profile` and `email`. The authority is `https://<authentik>/application/o/<app-slug>/`. Access tokens carry `aud` = the client id.
-- **Keycloak:** create a client with *Client authentication* off and *Standard flow* on. The authority is `https://<keycloak>/realms/<realm>`. Keycloak access tokens have `aud: account` by default. Either add an *Audience* mapper for the client id, or set `Oidc__Audience=account`.
+| Setting | Value |
+|---|---|
+| Client type | **Public** (no client secret). The PWA runs in the browser and cannot keep a secret. |
+| Grant / flow | **Authorization Code with PKCE** (S256). No implicit flow, no client credentials. |
+| Redirect URI | The app's address **with the trailing slash**, for example `https://floorplan.example.com/`. If the app is in a subfolder: `https://example.com/floorplan/`. It must match exactly. |
+| Post-logout redirect URI | The same address, `https://floorplan.example.com/`. *Log out* ends the session at the provider (its `end_session_endpoint`) and comes back here. |
+| Web origin (CORS) | The app's origin, `https://floorplan.example.com`. The browser calls the provider's token endpoint directly. |
+| Scopes | `openid profile email`, plus `offline_access` if your provider only gives refresh tokens with it (see below). |
+| Access token | A **JWT signed with an asymmetric key** (RS256 or ES256), so the API can check it against the provider's public keys. |
+
+The client id goes into `OIDC_CLIENT_ID`, and the provider's issuer URL into `OIDC_AUTHORITY`. The PWA reads both from `/api/config`, so nothing is built into the app.
+
+**Staying signed in.** The app renews the access token in the background with the refresh token. Without a refresh token, you are signed out when the access token expires and have to sign in again. Set `OIDC_SCOPES=openid profile email offline_access` if your provider needs that scope for refresh tokens.
+
+- **Authentik:**
+  1. Create an *OAuth2/OpenID Provider*. Set *Client type* to **Public**.
+  2. Add the redirect URI, `https://floorplan.example.com/`, with matching mode *Strict*. If your version lists post-logout redirect URIs separately, add the same address there too.
+  3. Under *Signing Key*, choose a certificate (for example *authentik Self-signed Certificate*). Without one, tokens are signed with HS256 and the API cannot check them.
+  4. Under *Scopes*, add `openid`, `profile`, `email` and `offline_access`, and set `OIDC_SCOPES=openid profile email offline_access`. Otherwise Authentik gives no refresh token.
+  5. Create an *Application* that uses this provider. Its slug is part of the authority: `https://<authentik>/application/o/<app-slug>/`. Access tokens have `aud` = the client id, so no audience setting is needed.
+- **Keycloak:**
+  1. Create an *OpenID Connect* client. Turn *Client authentication* off, and turn *Standard flow* on.
+  2. Under *Advanced*, set *Proof Key for Code Exchange Code Challenge Method* to `S256`.
+  3. Set *Valid redirect URIs* to `https://floorplan.example.com/`, *Valid post logout redirect URIs* to the same address (or `+`), and *Web origins* to `https://floorplan.example.com` (or `+`).
+  4. The authority is `https://<keycloak>/realms/<realm>`. Keycloak gives refresh tokens without extra scopes. Its access tokens have `aud: account` by default: either add an *Audience* mapper for the client id, or set `OIDC_AUDIENCE=account`.
 
 Users are created on their first request, from the token's `sub`, `name` (or `preferred_username`) and `email`. If the access token has no email, the provider's userinfo endpoint is asked. An email that the provider marks as `email_verified: false` is ignored, so nobody can claim a share by setting someone else's address.
 

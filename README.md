@@ -67,7 +67,15 @@ The house in 3D: walls with their door and window openings, sloped ceilings, sta
 
 ### Docker (app and server in one container)
 
-The `Dockerfile` builds the PWA and the ASP.NET Core API into one image. You need an OIDC provider with a public client (Authorization Code + PKCE).
+The `Dockerfile` builds the PWA and the ASP.NET Core API into one image. You need an OIDC provider (Authentik, Keycloak, …) with this client:
+
+- **Type:** public (no secret), Authorization Code with PKCE
+- **Redirect URI:** the app's address with the trailing slash, e.g. `https://floorplan.example.com/`
+- **Post-logout redirect URI:** the same address
+- **Web origin:** `https://floorplan.example.com`
+- **Scopes:** `openid profile email` (add `offline_access` on Authentik to stay signed in)
+
+The provider walkthroughs are in [server/README.md](server/README.md#oidc-provider).
 
 ```bash
 cat > .env <<'ENV'
