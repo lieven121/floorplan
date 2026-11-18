@@ -1,0 +1,286 @@
+<script setup lang="ts">
+/**
+ * The drawing at the top of the room editor. Pan, pinch and zoom like the
+ * floor view; what a tap does depends on the editor mode.
+ */
+import { computed, ref, watch } from 'vue';
+import { DEFAULT_VIEW, type LengthUnit, type Opening, type Room, type ViewSettings } from '../model/schema';
+import { type Bounds, boundsOf, grabOffset, openingGeometry, placeOpeningAt, roomGeometry } from '../geometry/floor';
+import { add, rotate, type Vec } from '../geometry/vec';
+import { type PressHandler, usePanZoom, useStoredFlag } from '../composables/usePanZoom';
+import PlanContent from './PlanContent.vue';
+import ViewMenu from './ViewMenu.vue';
+import ZoomControls from './ZoomControls.vue';
+import { PLAN } from './planStyle';
+import type { EditorMode, Selection } from './editorTypes';
+
+const props = defineProps<{
+  room: Room;
+  openings: Opening[];
+  unit: LengthUnit;
+  mode: EditorMode;
+  selection: Selection | null;
+  view?: ViewSettings;
+  headroom?: number;
+  /** Notes mode: the next tap on the drawing places a new note dot. */
+  placing?: boolean;
+  accent?: string;
+}>();
+const emit = defineEmits<{
+  /** `tapped`: the user tapped it in the drawing (so the matching field should get focus). */
+  select: [sel: Selection | null, tapped: boolean];
+  moveFurniture: [id: string, x: number, y: number];
+  movePin: [id: string, x: number, y: number];
+  moveStair: [id: string, x: number, y: number];
+  moveOpening: [id: string, wallIndex: number, offset_mm: number];
+  place: [x: number, y: number];
+}>();
+
+const view = computed(() => props.view ?? DEFAULT_VIEW);
+const svg = ref<SVGSVGElement>();
+const showView = ref(false);
+const { flag: autoZoom, set: setAutoZoom } = useStoredFlag('fp.autoZoom.room', true);
+const geom = computed(() => roomGeometry(props.room));
+
+function selectionFor(el: Element): Selection | null {
+  const get = (a: string) => el.getAttribute(a);
+  if (get('data-pin') !== null) return { kind: 'pin', id: get('data-pin')! };
+  if (get('data-stair') !== null) return { kind: 'stair', id: get('data-stair')! };
+  if (get('data-furniture') !== null) return { kind: 'furniture', id: get('data-furniture')! };
+  if (get('data-corner') !== null) return { kind: 'corner', index: Number(get('data-corner')) };
+  if (get('data-opening') !== null) return { kind: 'opening', id: get('data-opening')! };
+  if (get('data-diagonal') !== null) return { kind: 'diagonal', index: Number(get('data-diagonal')) };
+  if (get('data-wall') !== null) return { kind: 'wall', index: Number(get('data-wall')) };
+  return null;
+}
+
+/** Things you can drag in a mode: their start position and where moves go. */
+function draggable(sel: Selection): { start: Vec; to: (x: number, y: number) => void } | null {
+  if (sel.kind === 'furniture' && props.mode === 'furniture') {
+    const f = props.room.furniture?.find((x) => x.id === sel.id);
+    return f ? { start: { x: f.x_mm, y: f.y_mm }, to: (x, y) => emit('moveFurniture', sel.id, x, y) } : null;
+  }
+  if (sel.kind === 'stair' && props.mode === 'layout') {
+    const s = props.room.stairs?.find((x) => x.id === sel.id);
+    return s ? { start: { x: s.x_mm, y: s.y_mm }, to: (x, y) => emit('moveStair', sel.id, x, y) } : null;
+  }
+  if (sel.kind === 'pin' && props.mode === 'notes') {
+    const p = props.room.pins?.find((x) => x.id === sel.id);
+    return p ? { start: { x: p.x_mm, y: p.y_mm }, to: (x, y) => emit('movePin', sel.id, x, y) } : null;
+  }
+  return null;
+}
+
+function keyOf(s: Selection): string {
+  return `${s.kind}:${'id' in s ? s.id : s.index}`;
+}
+
+/** Selecting something you're about to drag must not zoom: the view would jump under your finger. */
+let skipZoom = false;
+function selectForDrag(sel: Selection) {
+  if (keyOf(sel) !== selKey.value) skipZoom = true;
+  emit('select', sel, false);
+}
+
+function onPress(e: PointerEvent, world: Vec): PressHandler | null {
+  if (props.placing) return { end: (moved) => !moved && place(e) }; // the tap places a note
+  const el = (e.target as Element).closest(
+    '[data-pin],[data-furniture],[data-corner],[data-opening],[data-diagonal],[data-wall],[data-stair]',
+  );
+  const sel = el && selectionFor(el);
+  if (!sel) return null;
+  if (sel.kind === 'opening' && props.mode === 'layout') {
+    const op = props.openings.find((o) => o.id === sel.id);
+    if (op) {
+      selectForDrag(sel);
+      const grab = grabOffset(geom.value, op, world);
+      return {
+        move: (w) => {
+          const at = placeOpeningAt(geom.value, op.width_mm, w, grab);
+          if (at) emit('moveOpening', sel.id, at.wallIndex, at.offset_mm);
+        },
+        end: (moved) => !moved && emit('select', sel, true),
+      };
+    }
+  }
+  const d = draggable(sel);
+  if (d) {
+    selectForDrag(sel);
+    // The preview room sits at 0,0 unrotated, so world = room coordinates.
+    return {
+      move: (w) => d.to(d.start.x + w.x - world.x, d.start.y + w.y - world.y),
+      end: (moved) => !moved && emit('select', sel, true),
+    };
+  }
+  // Walls, corners, …: select on tap, so a drag that starts on a wall still pans.
+  return { end: (moved) => !moved && emit('select', sel, true) };
+}
+
+function place(e: PointerEvent) {
+  const w = pz.toWorld(e.clientX, e.clientY);
+  emit('place', w.x, w.y);
+}
+
+function onEmptyTap() {
+  emit('select', null, true);
+}
+
+const pz = usePanZoom(svg, { onPress, onEmptyTap, onReady: () => fitRoom(false) });
+
+function fitRoom(animate = true) {
+  const b = boundsOf([geom.value]);
+  if (b && b.maxX - b.minX > 1) pz.fitBounds(b, { pad: 0.12, minSpan: 1500, animate });
+  else pz.setView({ cx: 2000, cy: 1500, s: Math.max(6000 / (pz.size.value.w || 1), 4500 / (pz.size.value.h || 1)) });
+}
+
+function selectionBounds(sel: Selection): Bounds | null {
+  const g = geom.value;
+  const box = (ps: (Vec | undefined)[]): Bounds | null => {
+    const ok = ps.filter((p): p is Vec => !!p);
+    if (!ok.length) return null;
+    return {
+      minX: Math.min(...ok.map((p) => p.x)),
+      minY: Math.min(...ok.map((p) => p.y)),
+      maxX: Math.max(...ok.map((p) => p.x)),
+      maxY: Math.max(...ok.map((p) => p.y)),
+    };
+  };
+  const m = g.inner.length;
+  switch (sel.kind) {
+    case 'wall':
+      return box([g.inner[sel.index], g.inner[g.solved.closed ? (sel.index + 1) % m : sel.index + 1]]);
+    case 'corner':
+      return box([g.inner[sel.index]]);
+    case 'diagonal': {
+      const d = props.room.diagonals[sel.index];
+      return d ? box([g.inner[d.from], g.inner[d.to]]) : null;
+    }
+    case 'opening': {
+      const op = props.openings.find((o) => o.id === sel.id);
+      const o = op && openingGeometry(g, op, [g]);
+      return o ? box([o.a, o.b, o.ao, o.bo]) : null;
+    }
+    case 'pin': {
+      const p = props.room.pins?.find((x) => x.id === sel.id);
+      return p ? box([{ x: p.x_mm, y: p.y_mm }]) : null;
+    }
+    case 'furniture':
+    case 'stair': {
+      const f =
+        sel.kind === 'furniture'
+          ? props.room.furniture?.find((x) => x.id === sel.id)
+          : props.room.stairs?.map((s) => ({ ...s, depth_mm: s.width_mm, width_mm: s.length_mm })).find((x) => x.id === sel.id);
+      if (!f) return null;
+      const c = { x: f.x_mm, y: f.y_mm };
+      return box(
+        [
+          [-1, -1],
+          [1, -1],
+          [1, 1],
+          [-1, 1],
+        ].map(([sx, sy]) => add(c, rotate({ x: (sx * f.width_mm) / 2, y: (sy * f.depth_mm) / 2 }, f.rotation_deg))),
+      );
+    }
+  }
+}
+
+function zoomToSelection() {
+  const b = props.selection && selectionBounds(props.selection);
+  if (b) pz.fitBounds(b, { pad: 0.25, minSpan: 2200, animate: true });
+}
+
+// Zoom to a newly selected item (not on every move while dragging it).
+const selKey = computed(() => (props.selection ? keyOf(props.selection) : ''));
+watch(selKey, () => {
+  if (skipZoom) {
+    skipZoom = false;
+    return;
+  }
+  if (autoZoom.value && props.selection) zoomToSelection();
+});
+
+// Keep the whole room in view while you type, until you pan or zoom yourself.
+const boundsKey = computed(() => JSON.stringify(boundsOf([geom.value])));
+watch(boundsKey, () => {
+  if (!pz.manual.value && !(autoZoom.value && props.selection)) fitRoom(false);
+});
+
+const highlight = computed(() => {
+  const s = props.selection;
+  if (!s) return {};
+  if (s.kind === 'wall') return { wall: s.index };
+  if (s.kind === 'corner') return { corner: s.index };
+  if (s.kind === 'diagonal') return { diagonal: s.index };
+  if (s.kind === 'opening') return { opening: s.id };
+  if (s.kind === 'pin') return { pin: s.id };
+  if (s.kind === 'stair') return { stair: s.id };
+  return { furniture: s.id };
+});
+
+const hint = computed(() => {
+  if (props.placing) return 'Tap where the note goes';
+  if (props.mode === 'layout') return 'Tap a wall, corner, door or stairs to edit it · drag doors, windows and stairs to move them';
+  if (props.mode === 'furniture') return 'Drag furniture to place it · tap to select';
+  if (props.mode === 'notes') return 'Drag a note dot to move it · tap to select';
+  return '';
+});
+
+function toggleAuto(v: boolean) {
+  setAutoZoom(v);
+  if (v) zoomToSelection();
+}
+
+defineExpose({
+  fitRoom,
+  zoomIn: () => pz.zoomBy(1 / 1.5),
+  zoomOut: () => pz.zoomBy(1.5),
+  toggleView: () => (showView.value = !showView.value),
+});
+</script>
+
+<template>
+  <div class="preview-canvas" :class="{ placing }">
+    <svg ref="svg" xmlns="http://www.w3.org/2000/svg" :viewBox="pz.viewBox.value.str" v-on="pz.handlers">
+      <rect
+        :x="pz.viewBox.value.x"
+        :y="pz.viewBox.value.y"
+        :width="pz.viewBox.value.w"
+        :height="pz.viewBox.value.h"
+        :fill="PLAN.paper"
+      />
+      <PlanContent
+        :rooms="[room]"
+        :openings="openings"
+        :unit="unit"
+        :interactive="false"
+        :editable="mode === 'layout'"
+        :furniture-editable="mode === 'furniture'"
+        :pins-editable="mode === 'notes'"
+        :show-corners="mode === 'layout'"
+        :show-angles="mode === 'layout' || view.angles"
+        :show-diagonals="mode === 'layout'"
+        :show-dimensions="mode === 'layout' || view.dimensions"
+        :show-names="view.names"
+        :show-furniture="mode === 'furniture' || view.furniture"
+        :show-pins="mode === 'notes' || view.notes"
+        :show-finishes="view.finishes"
+        :headroom="headroom"
+        :pin-radius="Math.max(110, 10 * pz.view.value.s)"
+        :highlight="highlight"
+        :accent="accent"
+      />
+    </svg>
+    <ZoomControls
+      :auto-zoom="autoZoom"
+      :view-open="showView"
+      fit-label="Show the whole room"
+      @zoom-in="pz.zoomBy(1 / 1.5)"
+      @zoom-out="pz.zoomBy(1.5)"
+      @fit="fitRoom()"
+      @view="showView = !showView"
+      @update:auto-zoom="toggleAuto"
+    />
+    <ViewMenu v-if="showView && props.view" :view="props.view" @close="showView = false" />
+    <p v-if="hint" class="preview-hint">{{ hint }}</p>
+  </div>
+</template>
