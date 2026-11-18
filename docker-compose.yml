@@ -5,8 +5,6 @@ services:
   floorplan:
     build:
       context: .
-      args:
-        SIXLABORS_LICENSE_KEY: ${SIXLABORS_LICENSE_KEY:-}
     image: floorplan:latest
     restart: unless-stopped
     ports:

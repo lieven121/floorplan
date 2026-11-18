@@ -50,7 +50,7 @@ export async function shrinkImage(blob: Blob): Promise<Blob> {
     const out = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
     return out && out.size < blob.size ? out : blob;
   } catch {
-    return blob; // the server compresses anything still over 20 MiB
+    return blob; // putFile refuses it if it is still over 20 MiB
   }
 }
 
@@ -125,8 +125,8 @@ export class RestAdapter implements StorageAdapter {
     const home = homeId ?? this.current;
     if (!home) throw new Error('Open a plan first.');
     const file = await shrinkImage(blob);
-    if (file.size > MAX_UPLOAD && !file.type.startsWith('image/')) {
-      throw new Error('Files can be at most 20 MB.');
+    if (file.size > MAX_UPLOAD) {
+      throw new Error(file.type.startsWith('image/') ? 'This picture could not be made smaller than 20 MB.' : 'Files can be at most 20 MB.');
     }
     const form = new FormData();
     form.append('id', id);

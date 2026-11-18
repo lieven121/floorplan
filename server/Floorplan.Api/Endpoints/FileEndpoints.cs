@@ -8,7 +8,7 @@ using Microsoft.Net.Http.Headers;
 
 namespace Floorplan.Api.Endpoints;
 
-public sealed record FileDto(string Id, string HomeId, string RoomId, string Name, string Mime, long Size, DateTime CreatedAt, bool Compressed);
+public sealed record FileDto(string Id, string HomeId, string RoomId, string Name, string Mime, long Size, DateTime CreatedAt);
 
 public static class FileEndpoints
 {
@@ -24,7 +24,7 @@ public static class FileEndpoints
         // Uploading again with the same id replaces the file.
         api.MapPost("/homes/{id}/rooms/{roomId}/files", async (
                 string id, string roomId, HttpRequest request, CurrentUser current, AppDb db, FileStore store,
-                ILoggerFactory logs, CancellationToken ct) =>
+                CancellationToken ct) =>
             {
                 if (!FileStore.IsValidId(id)) return Results.NotFound();
                 if (!FileStore.IsValidId(roomId)) return Results.BadRequest(new { error = "invalid room id" });
@@ -47,39 +47,13 @@ public static class FileEndpoints
 
                 var name = SafeName(upload.FileName);
                 var mime = string.IsNullOrWhiteSpace(upload.ContentType) ? MediaTypeNames.Application.Octet : upload.ContentType;
-                var compressed = false;
-                long size;
-                string relative;
-
+                // The app shrinks photos on the phone before uploading, so this only stops very large files.
+                if (upload.Length > options.MaxFileBytes)
+                    return TooLarge($"Files can be at most {options.MaxFileBytes / (1024 * 1024)} MiB.");
+                var size = upload.Length;
+                var relative = FileStore.RelativePath(home!.Id, roomId, fileId, FileStore.ExtensionFor(name, mime));
                 await using (var input = upload.OpenReadStream())
-                {
-                    if (upload.Length <= options.MaxFileBytes)
-                    {
-                        relative = FileStore.RelativePath(home!.Id, roomId, fileId, FileStore.ExtensionFor(name, mime));
-                        await store.SaveAsync(relative, input, ct);
-                        size = upload.Length;
-                    }
-                    else
-                    {
-                        var info = await ImageCompressor.IdentifyAsync(input, ct);
-                        if (info is null)
-                            return TooLarge($"Files over {options.MaxFileBytes / (1024 * 1024)} MiB are only accepted for images, which are compressed.");
-                        if ((long)info.Width * info.Height > ImageCompressor.MaxPixels)
-                            return TooLarge("Image has too many pixels to compress.");
-
-                        await using var jpeg = await ImageCompressor.CompressAsync(input, options.MaxFileBytes, ct);
-                        if (jpeg is null) return TooLarge("Image could not be compressed under the size limit.");
-                        logs.CreateLogger("Files").LogInformation(
-                            "Compressed {Name} from {From} to {To} bytes", name, upload.Length, jpeg.Length);
-
-                        name = Path.ChangeExtension(name, ".jpg");
-                        mime = MediaTypeNames.Image.Jpeg;
-                        relative = FileStore.RelativePath(home!.Id, roomId, fileId, "jpg");
-                        size = jpeg.Length;
-                        await store.SaveAsync(relative, jpeg, ct);
-                        compressed = true;
-                    }
-                }
+                    await store.SaveAsync(relative, input, ct);
 
                 if (existing is null)
                 {
@@ -100,7 +74,7 @@ public static class FileEndpoints
                     existing.Path = relative;
                 }
                 await db.SaveChangesAsync(ct);
-                return Results.Ok(ToDto(existing, compressed));
+                return Results.Ok(ToDto(existing));
             })
             .WithMetadata(new RequestSizeLimitAttribute(options.MaxUploadBytes))
             .WithFormOptions(multipartBodyLengthLimit: options.MaxUploadBytes);
@@ -112,7 +86,7 @@ public static class FileEndpoints
             var (_, role) = await Access.FindAsync(db, user, id, ct);
             if (role is null) return Results.NotFound();
             var files = await db.Files.Where(f => f.HomeId == id).OrderBy(f => f.CreatedAt).ToListAsync(ct);
-            return Results.Ok(files.Select(f => ToDto(f, false)));
+            return Results.Ok(files.Select(f => ToDto(f)));
         });
 
         api.MapGet("/files/{fileId}", async (string fileId, HttpContext http, CurrentUser current, AppDb db, FileStore store, CancellationToken ct) =>
@@ -154,8 +128,8 @@ public static class FileEndpoints
         return role is null ? (null, null) : (file, role);
     }
 
-    private static FileDto ToDto(StoredFile f, bool compressed) =>
-        new(f.Id, f.HomeId, f.RoomId, f.Name, f.Mime, f.Size, f.CreatedAt, compressed);
+    private static FileDto ToDto(StoredFile f) =>
+        new(f.Id, f.HomeId, f.RoomId, f.Name, f.Mime, f.Size, f.CreatedAt);
 
     private static IResult TooLarge(string message) =>
         Results.Json(new { error = "too_large", message }, statusCode: StatusCodes.Status413PayloadTooLarge);

@@ -3,9 +3,6 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Floorplan.Api.Storage;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace Floorplan.Api.Tests;
 
@@ -135,39 +132,7 @@ public sealed class FileTests(ApiFactory api) : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Image_over_20_MiB_is_compressed_to_a_jpeg_under_20_MiB()
-    {
-        // Random noise barely compresses, so this PNG is well over 20 MiB.
-        const int width = 3200, height = 2400;
-        var pixels = new byte[width * height * 4];
-        new Random(42).NextBytes(pixels);
-        using var image = Image.LoadPixelData<Rgba32>(pixels, width, height);
-        using var png = new MemoryStream();
-        await image.SaveAsPngAsync(png, new PngEncoder { CompressionLevel = PngCompressionLevel.BestSpeed });
-        Assert.True(png.Length > 20 * MiB, $"test image is only {png.Length} bytes");
-
-        var alice = api.As("alice");
-        var homeId = await TestData.CreateHomeAsync(alice);
-        var fileId = TestData.NewId();
-        var res = await alice.PostAsync($"/api/homes/{homeId}/rooms/living/files", Form(png.ToArray(), "photo.png", "image/png", fileId));
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-
-        var dto = await res.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.True(dto.GetProperty("compressed").GetBoolean());
-        Assert.Equal("image/jpeg", dto.GetProperty("mime").GetString());
-        Assert.Equal("photo.jpg", dto.GetProperty("name").GetString());
-        var size = dto.GetProperty("size").GetInt64();
-        Assert.True(size <= 20 * MiB, $"stored size {size}");
-
-        var onDisk = new FileInfo(Path.Combine(api.DataDir, homeId, "living", $"{fileId}.jpg"));
-        Assert.True(onDisk.Exists);
-        Assert.Equal(size, onDisk.Length);
-        var info = await Image.IdentifyAsync(onDisk.FullName);
-        Assert.Equal("JPEG", info.Metadata.DecodedImageFormat?.Name);
-    }
-
-    [Fact]
-    public async Task Non_image_over_20_MiB_gets_413()
+    public async Task File_over_20_MiB_gets_413()
     {
         var bytes = new byte[21 * MiB];
         new Random(1).NextBytes(bytes);
