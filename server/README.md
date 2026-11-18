@@ -1,8 +1,8 @@
 # Floor plan server
 
-An ASP.NET Core 9 API for the floor plan PWA. It saves homes per user, shares them by email, and stores the pictures and documents attached to rooms. It also serves the built PWA, so the whole app runs in one container.
+An ASP.NET Core 10 API for the floor plan PWA. It saves homes per user, shares them by email, and stores the pictures and documents attached to rooms. It also serves the built PWA, so the whole app runs in one container.
 
-- `Floorplan.Api/`: minimal APIs, EF Core with SQLite, and ImageSharp for compressing pictures.
+- `Floorplan.Api/`: minimal APIs and EF Core with SQLite.
 - `Floorplan.Api.Tests/`: xUnit tests that run the API in-process with `WebApplicationFactory`.
 
 ## Run it locally
@@ -44,8 +44,7 @@ Settings come from `appsettings.json` or environment variables. In an environmen
 | `Oidc:ValidateAudience` | `true` | Turn this off only if your provider puts no usable `aud` in access tokens. |
 | `Oidc:Scopes` | `openid profile email` | Returned to the PWA by `/api/config`. |
 | `Oidc:RequireHttpsMetadata` | `true` | Set to `false` only for a provider on plain http on your LAN. |
-| `Files:MaxFileBytes` | 20 MiB | The largest file that is stored. |
-| `Files:MaxUploadBytes` | 100 MiB | The largest upload accepted before compression. |
+| `Files:MaxFileBytes` | 20 MiB | The largest file accepted. The app shrinks photos on the phone before uploading. |
 | `Cors:Origins` | `[]` | Extra browser origins. Development adds `http://localhost:5173`. |
 
 ### OIDC provider
@@ -65,18 +64,16 @@ The root `Dockerfile` builds the PWA (`npm ci && npm run build`), publishes the 
 cat > .env <<'ENV'
 OIDC_AUTHORITY=https://auth.example.com/application/o/floorplan/
 OIDC_CLIENT_ID=floorplan
-SIXLABORS_LICENSE_KEY=
 ENV
 docker compose up -d --build
 ```
 
-- **ImageSharp license:** ImageSharp 3.2 checks for a Six Labors license key when it builds in Release, which is what the image uses. Six Labors offers a free community key for open-source and small non-commercial users (see sixlabors.com/pricing). Pass it as the `SIXLABORS_LICENSE_KEY` build arg; compose reads it from `.env`. The key is used only in the build stage, not in the final image.
 - **Reverse proxy:** put the container behind your TLS proxy (Traefik, Caddy, nginx). `X-Forwarded-For`, `-Proto` and `-Host` are trusted from any address, so do not expose port 8080 directly to the internet.
 - **Backups:** back up the `floorplan-data` volume. It holds `floorplan.db` and the files.
 
 ## API
 
-Everything is under `/api` and needs `Authorization: Bearer <access token>`, except `/api/config` and `/api/health`. Without a valid token, every other endpoint returns **401**. JSON is camelCase, and dates are UTC ISO-8601. Ids (home, room, file) are 1 to 64 characters from `A-Z a-z 0-9 - _`. Responses may carry a few extra fields beyond the ones listed (for example `owner`, `homeId` or `compressed`); clients can ignore them.
+Everything is under `/api` and needs `Authorization: Bearer <access token>`, except `/api/config` and `/api/health`. Without a valid token, every other endpoint returns **401**. JSON is camelCase, and dates are UTC ISO-8601. Ids (home, room, file) are 1 to 64 characters from `A-Z a-z 0-9 - _`. Responses may carry a few extra fields beyond the ones listed (for example `owner` or `homeId`); clients can ignore them.
 
 | Method | Path | Who | Body and result |
 |---|---|---|---|
@@ -91,7 +88,7 @@ Everything is under `/api` and needs `Authorization: Bearer <access token>`, exc
 | GET | `/homes/{id}/shares` | owner | `[{ email, role }]` |
 | POST | `/homes/{id}/shares` | owner | Body: `{ email, role: "viewer" \| "editor" }`. Adds the share, or changes its role. |
 | DELETE | `/homes/{id}/shares/{email}` | owner | 204. URL-encode the email. |
-| POST | `/homes/{id}/rooms/{roomId}/files` | owner, editor | multipart: `id` (the client's file id; reusing it replaces the file) and `file`. Returns `{ id, name, mime, size }`, where `mime` and `size` are after any compression. |
+| POST | `/homes/{id}/rooms/{roomId}/files` | owner, editor | multipart: `id` (the client's file id; reusing it replaces the file) and `file`. Returns `{ id, name, mime, size }`. |
 | GET | `/homes/{id}/files` | any role | The files of the home. |
 | GET | `/files/{id}` | any role on its home | The bytes, with Content-Type. |
 | DELETE | `/files/{id}` | owner, editor | 204 |
@@ -105,7 +102,7 @@ Access rules: someone with no access gets **404**, so they cannot tell that the 
 ### Files
 
 - **Location:** each file is saved at `{DataDir}/{homeId}/{roomId}/{fileId}.{ext}`. The ids are checked against the pattern above, and every resolved path is checked to stay inside `DataDir`. The uploaded file name is only used for display.
-- **Size:** files up to 20 MiB are stored as they are. A larger image is turned upright, stripped of metadata and re-encoded as JPEG. The quality steps down from 85 to 55, then the size shrinks by 25% at a time, until the result fits. Its name changes to `.jpg` and the response has `compressed: true`. A larger file that is not an image gets **413**.
+- **Size:** files up to 20 MiB are stored as they are; larger ones get **413**. The app shrinks photos over 4 MiB to at most 4000 px (JPEG) on the phone before uploading, so photos stay well under the limit.
 - **Downloads:** files are served with `Content-Security-Policy: sandbox` and `nosniff`. Only images, PDFs and plain text are shown inline; everything else downloads as `application/octet-stream`.
 
 ### Mapping to the PWA's `StorageAdapter`

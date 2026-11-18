@@ -83,7 +83,7 @@ The app listens on port 8080 and keeps its data in the `floorplan-data` volume. 
 
 ## Development
 
-Requires Node 22.18+ and, for the server, the .NET 9 SDK.
+Requires Node 22.18+ and, for the server, the .NET 10 SDK.
 
 ```bash
 npm install
@@ -100,7 +100,7 @@ cd server && dotnet test
 
 In Development the API runs without sign-in; the app offers the test users `dev`, `alice` and `bob` to try sharing.
 
-Stack: Vite+ (`vp`), Vue 3 (Composition API, TypeScript), three.js, jsPDF + svg2pdf.js, vite-plugin-pwa; ASP.NET Core 9, EF Core with SQLite, ImageSharp.
+Stack: Vite+ (`vp`), Vue 3 (Composition API, TypeScript), three.js, jsPDF + svg2pdf.js, vite-plugin-pwa; ASP.NET Core 10, EF Core with SQLite.
 
 ## Project layout
 

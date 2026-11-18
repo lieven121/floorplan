@@ -22,7 +22,6 @@ var options = new AppOptions
 {
     DataDir = Path.GetFullPath(config["DataDir"] is { Length: > 0 } d ? d : "./data", builder.Environment.ContentRootPath),
     MaxFileBytes = config.GetValue("Files:MaxFileBytes", 20L * 1024 * 1024),
-    MaxUploadBytes = config.GetValue("Files:MaxUploadBytes", 100L * 1024 * 1024),
     AuthEnabled = authEnabled,
     Authority = config["Oidc:Authority"] is { Length: > 0 } authority ? authority : null,
     ClientId = config["Oidc:ClientId"] is { Length: > 0 } clientId ? clientId : null,
@@ -72,7 +71,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     // Behind a reverse proxy (Traefik, Caddy, nginx) in Docker: trust its X-Forwarded-* headers.
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
-    o.KnownNetworks.Clear();
+    o.KnownIPNetworks.Clear();
     o.KnownProxies.Clear();
 });
 

@@ -15,19 +15,15 @@ COPY src ./src
 RUN npm run build
 
 # 2. Publish the API.
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS api
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS api
 WORKDIR /src
 COPY server/Floorplan.Api/Floorplan.Api.csproj server/Floorplan.Api/
 RUN dotnet restore server/Floorplan.Api/Floorplan.Api.csproj
 COPY server/Floorplan.Api/ server/Floorplan.Api/
-# ImageSharp 3.2+ checks for a Six Labors license key in Release builds (a free community key
-# exists for open-source and small users). Only used in this build stage, not in the final image.
-ARG SIXLABORS_LICENSE_KEY=""
-RUN dotnet publish server/Floorplan.Api/Floorplan.Api.csproj -c Release -o /app --no-restore \
-      "-p:SixLaborsLicenseKey=${SIXLABORS_LICENSE_KEY}"
+RUN dotnet publish server/Floorplan.Api/Floorplan.Api.csproj -c Release -o /app --no-restore
 
 # 3. Runtime.
-FROM mcr.microsoft.com/dotnet/aspnet:9.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=api /app ./
 COPY --from=web /src/dist ./wwwroot
