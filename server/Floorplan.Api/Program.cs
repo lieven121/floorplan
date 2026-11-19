@@ -52,8 +52,18 @@ if (authEnabled)
             o.MapInboundClaims = false;
             o.RequireHttpsMetadata = config.GetValue("Oidc:RequireHttpsMetadata", true);
             o.TokenValidationParameters.NameClaimType = UserClaims.Name;
-            o.TokenValidationParameters.ValidateAudience =
-                !string.IsNullOrEmpty(audience) && config.GetValue("Oidc:ValidateAudience", true);
+            OidcTokens.Configure(o.TokenValidationParameters, config, audience, options.ClientId);
+            o.Events = new JwtBearerEvents
+            {
+                // Say why a token was refused: otherwise a 401 leaves nothing in the logs.
+                OnAuthenticationFailed = ctx =>
+                {
+                    ctx.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("Floorplan.Api.Auth")
+                        .LogWarning("Access token refused: {Reason}", ctx.Exception.Message);
+                    return Task.CompletedTask;
+                },
+            };
         });
 }
 else

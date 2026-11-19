@@ -67,7 +67,7 @@ The house in 3D: walls with their door and window openings, sloped ceilings, sta
 
 ### Docker (app and server in one container)
 
-The `Dockerfile` builds the PWA and the ASP.NET Core API into one image. You need an OIDC provider (Authentik, Keycloak, …) with this client:
+One image holds the PWA and the ASP.NET Core API. It is published as `ghcr.io/lieven121/floorplan` for amd64 and arm64 (a Raspberry Pi works). You need an OIDC provider (Authentik, Keycloak, …) with this client:
 
 - **Type:** public (no secret), Authorization Code with PKCE
 - **Redirect URI:** the app's address with the trailing slash, e.g. `https://floorplan.example.com/`
@@ -76,6 +76,31 @@ The `Dockerfile` builds the PWA and the ASP.NET Core API into one image. You nee
 - **Scopes:** `openid profile email` (add `offline_access` on Authentik to stay signed in)
 
 The provider walkthroughs are in [server/README.md](server/README.md#oidc-provider).
+
+Put this in a `docker-compose.yml`, fill in your provider, and run `docker compose up -d`:
+
+```yaml
+services:
+  floorplan:
+    image: ghcr.io/lieven121/floorplan:0.9   # or :latest, or an exact version like :0.9.0
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - floorplan-data:/data
+    environment:
+      Oidc__Authority: https://auth.example.com/application/o/floorplan/
+      Oidc__ClientId: floorplan
+      # Oidc__Scopes: openid profile email offline_access   # on Authentik
+      # Oidc__Audience: account                              # on Keycloak without an audience mapper
+      # Oidc__TokenDecryptionCert__Path: /certs/encryption.pfx   # on OpenIddict, which encrypts access tokens
+      # Oidc__TokenDecryptionCert__Password: ...
+
+volumes:
+  floorplan-data:
+```
+
+To build the image from the source instead, clone the repository and use its `docker-compose.yml`:
 
 ```bash
 cat > .env <<'ENV'

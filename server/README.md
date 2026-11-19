@@ -41,7 +41,10 @@ Settings come from `appsettings.json` or environment variables. In an environmen
 | `Oidc:Authority` | (required) | The provider's issuer URL. Discovery and signing keys are read from it. |
 | `Oidc:ClientId` | | The public client the PWA signs in with. It is returned by `/api/config`. |
 | `Oidc:Audience` | ClientId | The expected `aud` of access tokens. |
-| `Oidc:ValidateAudience` | `true` | Turn this off only if your provider puts no usable `aud` in access tokens. |
+| `Oidc:ValidateAudience` | `true` | A token passes when its `aud` contains the audience, or when it has no `aud` but its `client_id` (or `azp`) is the client id. Turn this off only if neither works for your provider. |
+| `Oidc:TokenDecryptionCert:Path` | | A .pfx with the private key, for providers that encrypt access tokens (JWE), such as OpenIddict. |
+| `Oidc:TokenDecryptionCert:Password` | | The password of that .pfx. |
+| `Oidc:TokenDecryptionKey` | | Instead of a certificate: the base64 symmetric encryption key. |
 | `Oidc:Scopes` | `openid profile email` | Returned to the PWA by `/api/config`. |
 | `Oidc:RequireHttpsMetadata` | `true` | Set to `false` only for a provider on plain http on your LAN. |
 | `Files:MaxFileBytes` | 20 MiB | The largest file accepted. The app shrinks photos on the phone before uploading. |
@@ -77,11 +80,18 @@ The client id goes into `OIDC_CLIENT_ID`, and the provider's issuer URL into `OI
   3. Set *Valid redirect URIs* to `https://floorplan.example.com/`, *Valid post logout redirect URIs* to the same address (or `+`), and *Web origins* to `https://floorplan.example.com` (or `+`).
   4. The authority is `https://<keycloak>/realms/<realm>`. Keycloak gives refresh tokens without extra scopes. Its access tokens have `aud: account` by default: either add an *Audience* mapper for the client id, or set `OIDC_AUDIENCE=account`.
 
+- **OpenIddict:** register a public client (`ClientType = Public`) with the *authorization code* and *refresh token* grants, the endpoints *authorization*, *token* and *end session*, `RequirePkce`, and the redirect and post-logout redirect URIs above. The authority is the issuer, for example `https://auth.example.com/`.
+  OpenIddict **encrypts access tokens** by default. Give the API the encryption certificate (`Oidc__TokenDecryptionCert__Path` and `__Password`, mounted into the container and readable by its `app` user) or the symmetric key (`Oidc__TokenDecryptionKey`). Without it every API call gets **401**. Alternatively, call `DisableAccessTokenEncryption()` on the OpenIddict server. OpenIddict access tokens have no `aud` unless the token has resources; the API then accepts them by their `client_id`.
+
+If sign-in works but the API answers 401, the container log says why: look for `Access token refused:`.
+
 Users are created on their first request, from the token's `sub`, `name` (or `preferred_username`) and `email`. If the access token has no email, the provider's userinfo endpoint is asked. An email that the provider marks as `email_verified: false` is ignored, so nobody can claim a share by setting someone else's address.
 
 ## Docker
 
 The root `Dockerfile` builds the PWA (`npm ci && npm run build`), publishes the API, and copies `dist/` into the API's `wwwroot`. The container listens on port 8080 and keeps everything in the `/data` volume.
+
+Each version tag (`v0.9.0`) is built by the *Docker image* workflow and pushed to `ghcr.io/lieven121/floorplan` as `0.9.0`, `0.9` and `latest`, for `linux/amd64` and `linux/arm64`. To build it yourself:
 
 ```bash
 cat > .env <<'ENV'
