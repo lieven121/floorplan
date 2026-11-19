@@ -26,8 +26,9 @@ services:
       Oidc__Scopes: ${OIDC_SCOPES:-openid profile email}
       # Set to false only if the provider's access tokens carry no usable "aud".
       Oidc__ValidateAudience: ${OIDC_VALIDATE_AUDIENCE:-true}
-      # Providers that encrypt access tokens (OpenIddict): the encryption certificate (.pfx with
-      # private key, mounted below) or the base64 symmetric key. Without it the API answers 401.
+      # Optional, for providers that encrypt access tokens (OpenIddict). Without these the API checks
+      # such tokens at the provider's userinfo endpoint. With the encryption certificate (.pfx with
+      # private key, mounted below) or the base64 symmetric key it reads them itself.
       Oidc__TokenDecryptionCert__Path: ${OIDC_DECRYPTION_CERT:-}
       Oidc__TokenDecryptionCert__Password: ${OIDC_DECRYPTION_CERT_PASSWORD:-}
       Oidc__TokenDecryptionKey: ${OIDC_DECRYPTION_KEY:-}

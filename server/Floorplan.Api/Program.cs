@@ -44,7 +44,13 @@ if (authEnabled)
         throw new InvalidOperationException("Oidc:Authority is required when auth is enabled (env: Oidc__Authority).");
     var audience = config["Oidc:Audience"] is { Length: > 0 } a ? a : options.ClientId;
 
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    var canDecrypt = config["Oidc:TokenDecryptionCert:Path"] is { Length: > 0 } || config["Oidc:TokenDecryptionKey"] is { Length: > 0 };
+    var userinfoAllowed = config.GetValue("Oidc:UserinfoFallback", true);
+    builder.Services.AddMemoryCache();
+    builder.Services.AddAuthentication("Oidc")
+        // A JWT the API can verify goes to JwtBearer; an encrypted or opaque token is checked at the provider's userinfo endpoint.
+        .AddPolicyScheme("Oidc", null, o => o.ForwardDefaultSelector = ctx => UserinfoAuthHandler.SelectScheme(ctx, canDecrypt, userinfoAllowed))
+        .AddScheme<AuthenticationSchemeOptions, UserinfoAuthHandler>(UserinfoAuthHandler.SchemeName, null)
         .AddJwtBearer(o =>
         {
             o.Authority = options.Authority;

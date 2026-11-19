@@ -93,8 +93,6 @@ services:
       Oidc__ClientId: floorplan
       # Oidc__Scopes: openid profile email offline_access   # on Authentik
       # Oidc__Audience: account                              # on Keycloak without an audience mapper
-      # Oidc__TokenDecryptionCert__Path: /certs/encryption.pfx   # on OpenIddict, which encrypts access tokens
-      # Oidc__TokenDecryptionCert__Password: ...
 
 volumes:
   floorplan-data:

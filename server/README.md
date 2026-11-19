@@ -42,7 +42,9 @@ Settings come from `appsettings.json` or environment variables. In an environmen
 | `Oidc:ClientId` | | The public client the PWA signs in with. It is returned by `/api/config`. |
 | `Oidc:Audience` | ClientId | The expected `aud` of access tokens. |
 | `Oidc:ValidateAudience` | `true` | A token passes when its `aud` contains the audience, or when it has no `aud` but its `client_id` (or `azp`) is the client id. Turn this off only if neither works for your provider. |
-| `Oidc:TokenDecryptionCert:Path` | | A .pfx with the private key, for providers that encrypt access tokens (JWE), such as OpenIddict. |
+| `Oidc:UserinfoFallback` | `true` | An access token that is not a JWT the API can verify (encrypted, as OpenIddict makes them, or opaque) is checked by sending it to the provider's userinfo endpoint. `false` refuses such tokens. |
+| `Oidc:UserinfoCacheSeconds` | `300` | How long a userinfo answer is reused for the same token. |
+| `Oidc:TokenDecryptionCert:Path` | | Optional. A .pfx with the private key, so the API reads encrypted tokens itself instead of asking userinfo. |
 | `Oidc:TokenDecryptionCert:Password` | | The password of that .pfx. |
 | `Oidc:TokenDecryptionKey` | | Instead of a certificate: the base64 symmetric encryption key. |
 | `Oidc:Scopes` | `openid profile email` | Returned to the PWA by `/api/config`. |
@@ -81,7 +83,7 @@ The client id goes into `OIDC_CLIENT_ID`, and the provider's issuer URL into `OI
   4. The authority is `https://<keycloak>/realms/<realm>`. Keycloak gives refresh tokens without extra scopes. Its access tokens have `aud: account` by default: either add an *Audience* mapper for the client id, or set `OIDC_AUDIENCE=account`.
 
 - **OpenIddict:** register a public client (`ClientType = Public`) with the *authorization code* and *refresh token* grants, the endpoints *authorization*, *token* and *end session*, `RequirePkce`, and the redirect and post-logout redirect URIs above. The authority is the issuer, for example `https://auth.example.com/`.
-  OpenIddict **encrypts access tokens** by default. Give the API the encryption certificate (`Oidc__TokenDecryptionCert__Path` and `__Password`, mounted into the container and readable by its `app` user) or the symmetric key (`Oidc__TokenDecryptionKey`). Without it every API call gets **401**. Alternatively, call `DisableAccessTokenEncryption()` on the OpenIddict server. OpenIddict access tokens have no `aud` unless the token has resources; the API then accepts them by their `client_id`.
+  OpenIddict **encrypts access tokens** by default, so the API cannot read them. It sends them to the userinfo endpoint instead, which needs nothing extra: the client only needs the `openid` scope (and `profile` and `email` for the name and email). The answer is reused for 5 minutes per token, so a revoked token can still work for up to 5 minutes. The userinfo endpoint accepts a token issued to any client of the provider, so the API cannot check that the token was made for this app. To get that check, either call `DisableAccessTokenEncryption()` on the OpenIddict server, or give the API the encryption certificate (`Oidc__TokenDecryptionCert__Path` and `__Password`) or the symmetric key (`Oidc__TokenDecryptionKey`). OpenIddict access tokens have no `aud` unless the token has resources; the API then accepts them by their `client_id`.
 
 If sign-in works but the API answers 401, the container log says why: look for `Access token refused:`.
 
