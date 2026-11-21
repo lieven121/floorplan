@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace Floorplan.Api.Database;
 
@@ -9,6 +10,24 @@ public sealed class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
     public DbSet<HomeShare> HomeShares => Set<HomeShare>();
     public DbSet<StoredFile> Files => Set<StoredFile>();
     public DbSet<HomeVersion> HomeVersions => Set<HomeVersion>();
+
+    /// <summary>
+    /// All dates are stored in UTC, but SQLite gives them back without a kind, and JSON then has no
+    /// "Z": browsers read that as local time. Mark them as UTC when reading.
+    /// </summary>
+    protected override void ConfigureConventions(ModelConfigurationBuilder c)
+    {
+        c.Properties<DateTime>().HaveConversion<UtcConverter>();
+        c.Properties<DateTime?>().HaveConversion<NullableUtcConverter>();
+    }
+
+    sealed class UtcConverter() : ValueConverter<DateTime, DateTime>(
+        v => v.Kind == DateTimeKind.Local ? v.ToUniversalTime() : v,
+        v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+
+    sealed class NullableUtcConverter() : ValueConverter<DateTime?, DateTime?>(
+        v => v.HasValue && v.Value.Kind == DateTimeKind.Local ? v.Value.ToUniversalTime() : v,
+        v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : v);
 
     protected override void OnModelCreating(ModelBuilder b)
     {

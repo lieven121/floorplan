@@ -20,6 +20,19 @@ public sealed class HomeTests(ApiFactory api) : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Dates_read_back_from_the_database_are_marked_UTC()
+    {
+        var bob = api.As("bob");
+        var id = await TestData.CreateHomeAsync(bob);
+        await bob.PostAsJsonAsync($"/api/homes/{id}/versions", new { name = "v1", document = TestData.Project(id) });
+
+        var home = (await bob.GetFromJsonAsync<JsonElement[]>("/api/homes"))!.First(h => h.GetProperty("id").GetString() == id);
+        Assert.EndsWith("Z", home.GetProperty("updatedAt").GetString());
+        var version = (await bob.GetFromJsonAsync<JsonElement[]>($"/api/homes/{id}/versions"))![0];
+        Assert.EndsWith("Z", version.GetProperty("createdAt").GetString());
+    }
+
+    [Fact]
     public async Task Post_takes_id_name_document_and_returns_the_summary()
     {
         var alice = api.As("alice");
