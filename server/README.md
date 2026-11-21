@@ -68,7 +68,10 @@ Register the app with your provider as follows:
 
 The client id goes into `OIDC_CLIENT_ID`, and the provider's issuer URL into `OIDC_AUTHORITY`. The PWA reads both from `/api/config`, so nothing is built into the app.
 
-**Staying signed in.** The app renews the access token in the background with the refresh token. Without a refresh token, you are signed out when the access token expires and have to sign in again. Set `OIDC_SCOPES=openid profile email offline_access` if your provider needs that scope for refresh tokens.
+**Staying signed in.** The app renews the access token without leaving the page: shortly before it expires, when the app comes back to the foreground, when it is opened again after the token expired, and when the API answers 401.
+- With a **refresh token** it asks the token endpoint. Allow the *refresh token* grant for the client, and set `OIDC_SCOPES=openid profile email offline_access` if your provider needs that scope for refresh tokens.
+- Without one, or when the refresh token is refused, it signs in again in a hidden iframe (`prompt=none`) that uses your session at the provider. That comes back to the same redirect URI, so nothing extra has to be registered. It needs the provider to allow its authorize page in a frame of the app, and its session cookie to reach that frame: easiest when the provider and the app share a domain (`auth.example.com` and `floorplan.example.com`).
+- Only when both fail (the provider session ended too) are you logged out.
 
 - **Authentik:**
   1. Create an *OAuth2/OpenID Provider*. Set *Client type* to **Public**.

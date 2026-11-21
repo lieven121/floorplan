@@ -3,7 +3,7 @@
  * as the on-device storage, plus sharing.
  */
 import type { Id, Project } from '../model/schema';
-import { apiUrl, authHeaders } from '../auth/session';
+import { apiUrl, authHeaders, renewToken } from '../auth/session';
 import { ConflictError, type ProjectSummary, type Role, type StorageAdapter, type VersionSummary } from './types';
 
 export interface Share {
@@ -23,7 +23,10 @@ const MAX_UPLOAD = 20 * 1024 * 1024;
 const SHRINK_ABOVE = 4 * 1024 * 1024;
 
 async function call(path: string, init: RequestInit = {}): Promise<Response> {
-  const res = await fetch(apiUrl(path), { ...init, headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) } });
+  const send = () => fetch(apiUrl(path), { ...init, headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) } });
+  let res = await send();
+  // The access token ran out: get a new one without leaving the page, then try once more.
+  if (res.status === 401 && (await renewToken())) res = await send();
   if (res.status === 401) throw new Error('You are logged out. Log in again to save.');
   return res;
 }
