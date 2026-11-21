@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from './AppIcon.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { fileIdOf, fileUri, newProject, type Project, uid } from '../model/schema';
 import { parseProjectFile } from '../model/migrate';
@@ -212,7 +213,7 @@ const when = (s: string) => new Date(s).toLocaleString();
               <span>{{ p.name }} <span v-if="drafts.has(p.id)" class="role-tag unsaved">unsaved changes on this device</span></span>
               <small>Changed {{ when(p.updatedAt) }}</small>
             </button>
-            <button class="btn icon danger" :aria-label="`Delete ${p.name}`" @click="remove(p, true)">🗑</button>
+            <button class="btn icon danger" :aria-label="`Delete ${p.name}`" @click="remove(p, true)"><AppIcon name="trash" /></button>
           </li>
         </ul>
         <p v-else class="hint">Nothing yet. New plans go here; you can also upload the ones on this device.</p>
@@ -247,7 +248,7 @@ const when = (s: string) => new Date(s).toLocaleString();
             >
               ⇪
             </button>
-            <button class="btn icon danger" :aria-label="`Delete ${p.name}`" @click="remove(p, false)">🗑</button>
+            <button class="btn icon danger" :aria-label="`Delete ${p.name}`" @click="remove(p, false)"><AppIcon name="trash" /></button>
           </li>
         </ul>
         <div v-else class="empty-hint static">

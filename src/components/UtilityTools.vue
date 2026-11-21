@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from './AppIcon.vue';
 /**
  * The bar at the bottom of Utilities mode: choose the utility, then a symbol
  * to place or a pipe to draw. With something selected it shows its details
@@ -73,7 +74,7 @@ function setUtility(e: Event) {
       <strong>{{ point.label || pointKind(point.utility, point.kind).label }}</strong>
       <small>{{ utilityInfo(point.utility).label }}</small>
       <span class="spacer"></span>
-      <button v-if="!readonly" class="btn ghost small danger" aria-label="Delete this point" title="Delete (Del)" @click="remove">🗑</button>
+      <button v-if="!readonly" class="btn ghost small danger" aria-label="Delete this point" title="Delete (Del)" @click="remove"><AppIcon name="trash" /></button>
       <button class="btn ghost small" aria-label="Close" title="Close (Esc)" @click="emit('update:sel', null)">✕</button>
     </div>
     <div class="panel-grid">
@@ -101,7 +102,7 @@ function setUtility(e: Event) {
       <strong>{{ run.label || runKind(run.utility, run.kind).label }}</strong>
       <small>{{ len(runLength_mm(run)) }}</small>
       <span class="spacer"></span>
-      <button v-if="!readonly" class="btn ghost small danger" :aria-label="`Delete this ${utilityInfo(run.utility).line}`" title="Delete (Del)" @click="remove">🗑</button>
+      <button v-if="!readonly" class="btn ghost small danger" :aria-label="`Delete this ${utilityInfo(run.utility).line}`" title="Delete (Del)" @click="remove"><AppIcon name="trash" /></button>
       <button class="btn ghost small" aria-label="Close" title="Close (Esc)" @click="emit('update:sel', null)">✕</button>
     </div>
     <div class="panel-grid">

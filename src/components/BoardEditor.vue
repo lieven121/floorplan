@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from './AppIcon.vue';
 /**
  * Fuse boxes: DIN rails with their devices, what feeds what, and the circuit
  * behind each breaker. Changes go straight into the project (undo works).
@@ -417,7 +418,7 @@ function jumpTo(i: { deviceId?: string }) {
           <button class="btn small" title="Put it on the plan" @click="emit('placeBoard', b.id)">
             📍 {{ b.location ? 'Move' : 'Place' }}
           </button>
-          <button class="btn icon danger" :aria-label="`Delete ${b.name}`" @click="removeBoard(b)">🗑</button>
+          <button class="btn icon danger" :aria-label="`Delete ${b.name}`" @click="removeBoard(b)"><AppIcon name="trash" /></button>
         </div>
         <label v-if="e.boards.length > 1" class="field">
           <span class="field-label">Fed by</span>
@@ -613,7 +614,7 @@ function jumpTo(i: { deviceId?: string }) {
           <div class="row-actions">
             <button class="btn" aria-label="Move left" @click="move(-1)">◀</button>
             <button class="btn" aria-label="Move right" @click="move(1)">▶</button>
-            <button class="btn" title="Duplicate (Ctrl+D)" @click="duplicateSelected">⧉ Duplicate</button>
+            <button class="btn" title="Duplicate (Ctrl+D)" @click="duplicateSelected"><AppIcon name="copy" /> Duplicate</button>
             <button class="btn" title="Copy (Ctrl+C)" @click="copySelected">Copy</button>
             <button class="btn" :disabled="!clipboard" title="Paste after this one (Ctrl+V)" @click="pasteHere">Paste</button>
             <span class="spacer"></span>

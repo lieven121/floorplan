@@ -2123,3 +2123,37 @@ table.qty.small {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* ---- furniture and doors: group actions, colour, list order ---- */
+.furniture-row .row-extra {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.furniture-row .row-extra small {
+  flex: 1 1 100%;
+  color: var(--muted);
+}
+.color-field {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.color-field input[type='color'] {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface, transparent);
+}
+.order-buttons {
+  display: flex;
+  gap: 4px;
+}
+.order-buttons .btn {
+  flex: 1;
+}

@@ -224,6 +224,8 @@ function normalizeRoom(r: Obj): Room {
         rotation_deg: num(f.rotation_deg, 0),
         ...(typeof f.height_mm === 'number' && f.height_mm > 0 ? { height_mm: f.height_mm } : {}),
         ...(typeof f.elevation_mm === 'number' && f.elevation_mm !== 0 ? { elevation_mm: f.elevation_mm } : {}),
+        ...(typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color) ? { color: f.color.toLowerCase() } : {}),
+        ...(typeof f.group === 'string' && f.group.trim() ? { group: f.group.trim() } : {}),
       }),
     );
   }

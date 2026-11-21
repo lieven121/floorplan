@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from './AppIcon.vue';
 /** Photos and documents for a room. Files go straight into storage; the list is saved with the room. */
 import { onBeforeUnmount, ref, watch } from 'vue';
 import { type Attachment, fileIdOf, fileUri, uid } from '../model/schema';
@@ -107,7 +108,7 @@ const sizeText = (n?: number) =>
           <input v-model="a.text" :placeholder="a.kind === 'photo' ? 'Caption' : 'Description'" />
           <small>{{ a.name }} · {{ sizeText(a.size) }}</small>
         </div>
-        <button class="btn icon danger" aria-label="Remove" @click="remove(a)">✕</button>
+        <button class="btn icon danger" aria-label="Remove" title="Remove" @click="remove(a)"><AppIcon name="trash" /></button>
       </li>
     </ul>
 

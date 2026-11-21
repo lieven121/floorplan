@@ -77,6 +77,9 @@ export interface House {
   dispose(): void;
 }
 
+/** Furniture without a colour of its own. */
+const FURNITURE_3D = 0x9fb3c8;
+
 const roomHeight = (room: Room, fallback: number) => room.height_mm ?? fallback;
 
 /** Height of each floor's own floor above the lowest one: the rooms below plus a slab. */
@@ -203,6 +206,8 @@ function buildRoom(g: RoomGeom, gapsOf: (k: number) => Gap[], y0: number, opts: 
       wallOut.quad(pin(x.b, x.sill), pout(x.b, x.sill), pout(x.b, x.top), pin(x.b, x.top));
       wallOut.quad(pin(x.a, x.top), pout(x.a, x.top), pout(x.b, x.top), pin(x.b, x.top));
       if (x.sill > 0) wallOut.quad(pin(x.a, x.sill), pout(x.a, x.sill), pout(x.b, x.sill), pin(x.b, x.sill));
+      // A door or passage: the floor runs on through the wall, so it isn't a hole down to nothing.
+      else out.floor.quad(pin(x.a, 0), pout(x.a, 0), pout(x.b, 0), pin(x.b, 0));
       if (x.glass) {
         const mid = (tt: number, h: number) => up(add(add(A, scale(d, tt)), scale(nrm, t / 2)), h);
         out.glass.quad(mid(x.a, x.sill), mid(x.b, x.sill), mid(x.b, x.top), mid(x.a, x.top));
@@ -238,7 +243,8 @@ const WALL_LOOK: Record<WallStatus, { color: number; opacity: number }> = {
 };
 
 export function buildHouse(floors: Floor[], bases: Map<string, number>, opts: HouseOptions): House {
-  const out = { ceiling: new Tris(), glass: new Tris(), stairs: new Tris(), furniture: new Tris() };
+  const out = { ceiling: new Tris(), glass: new Tris(), stairs: new Tris() };
+  const furnitureByColor = new Map<number, Tris>();
   const floorsByColor = new Map<number, Tris>();
   const wallsByStatus = new Map<WallStatus, Tris>();
   const bucket = <K,>(m: Map<K, Tris>, key: K) => {
@@ -268,7 +274,9 @@ export function buildHouse(floors: Floor[], bases: Map<string, number>, opts: Ho
         if (f.shape === 'round') walls.cylinder(c, Math.min(f.width_mm, f.depth_mm) / 2, base, top);
         else walls.box(c, f.width_mm, f.depth_mm, f.rotation_deg + g.room.rotation_deg, base, top);
       }
-      if (opts.furniture) for (const f of g.room.furniture ?? []) buildFurniture(g.room, f, base, out.furniture);
+      if (opts.furniture)
+        for (const f of g.room.furniture ?? [])
+          buildFurniture(g.room, f, base, bucket(furnitureByColor, f.color ? parseInt(f.color.slice(1), 16) : FURNITURE_3D));
     }
   }
 
@@ -314,7 +322,12 @@ export function buildHouse(floors: Floor[], bases: Map<string, number>, opts: Ho
       order: 2,
     },
     { name: 'stairs', tris: out.stairs, material: new THREE.MeshLambertMaterial({ color: 0xb08d57, side }), edges: 0.3 },
-    { name: 'furniture', tris: out.furniture, material: new THREE.MeshLambertMaterial({ color: 0x9fb3c8, side }), edges: 0.3 },
+    ...[...furnitureByColor].map(([color, tris]) => ({
+      name: color === FURNITURE_3D ? 'furniture' : `furniture-${color.toString(16)}`,
+      tris,
+      material: new THREE.MeshLambertMaterial({ color, side }),
+      edges: 0.3,
+    })),
   ];
 
   const group = new THREE.Group();

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from './AppIcon.vue';
 /**
  * Named snapshots of the plan ("Current", "After renovation"): save one, look at
  * one, restore it, or start a separate plan from it.
@@ -133,8 +134,8 @@ function saveAsPlan(v: VersionSummary) {
             <div class="row-actions">
               <button class="btn small" :disabled="!!busy" @click="emit('look', v)">👁 Open to look</button>
               <button v-if="!readonly" class="btn small" :disabled="!!busy" @click="emit('restore', v)">↺ Restore</button>
-              <button class="btn small" :disabled="!!busy" @click="saveAsPlan(v)">⧉ Save as a new plan</button>
-              <button v-if="!readonly" class="btn small danger" :disabled="!!busy" @click="remove(v)">🗑 Delete</button>
+              <button class="btn small" :disabled="!!busy" @click="saveAsPlan(v)"><AppIcon name="copy" /> Save as a new plan</button>
+              <button v-if="!readonly" class="btn small danger" :disabled="!!busy" @click="remove(v)"><AppIcon name="trash" /> Delete</button>
             </div>
           </li>
         </ul>

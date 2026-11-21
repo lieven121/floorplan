@@ -10,6 +10,7 @@ import { HEADROOM_MM, ceilingPlanes, hasSlope, headroomArea_m2 } from '../geomet
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import {
   type Attachment,
+  type Furniture,
   type LengthUnit,
   type Opening,
   type OpeningType,
@@ -33,6 +34,16 @@ import {
   uid,
 } from '../model/schema';
 import { FURNITURE_PRESETS, furnitureHeight, newFurniture } from '../model/furniture';
+import {
+  clipboard,
+  copyToClipboard,
+  groupNames,
+  groupOf,
+  moveInList,
+  pasteFurniture,
+  pasteOpening,
+  turnGroup,
+} from '../model/clipboard';
 import { FLOOR_COVERINGS, floorCovering } from '../model/finishes';
 import { interiorAngle } from '../geometry/room';
 import { matchingWalls, openingGeometry, roomGeometry, wallLength } from '../geometry/floor';
@@ -40,9 +51,11 @@ import { centroid, normDeg } from '../geometry/vec';
 import type { StorageAdapter } from '../storage/types';
 import { deleteUnusedFiles } from '../storage/versions';
 import { ctrlOrCmd, isTyping, useKeydown } from '../composables/useShortcuts';
+import { useEditHistory } from '../composables/useEditHistory';
 import { formatLength, parseLength } from '../units';
 import { canRemoveCorner, removeCorner, splitWall } from '../model/walls';
 import AttachmentsPanel from './AttachmentsPanel.vue';
+import AppIcon from './AppIcon.vue';
 import NumField from './NumField.vue';
 import RoomPreview from './RoomPreview.vue';
 import ShortcutsHelp from './ShortcutsHelp.vue';
@@ -555,6 +568,110 @@ function removeFurniture(id: string) {
   if (isActive('furniture', id)) sel.value = null;
 }
 
+// ---- copy, paste, groups and order ---------------------------------------------------
+
+const wallLenNow = (k: number) => (geom.value.solved.closed ? wallLength(geom.value, k) : wallLen(k));
+const furnitureList = () => (draft.furniture ??= []);
+const groupList = computed(() => groupNames(draft.furniture ?? []));
+const groupCount = (name: string) => (draft.furniture ?? []).filter((f) => f.group === name).length;
+const copied = ref('');
+let copiedTimer = 0;
+function note(text: string) {
+  copied.value = text;
+  clearTimeout(copiedTimer);
+  copiedTimer = window.setTimeout(() => (copied.value = ''), 1800);
+}
+
+/** Copies of furniture, 30 cm further on when the originals are in this room. */
+function addFurnitureCopies(items: Furniture[]): Furniture[] {
+  const list = furnitureList();
+  const here = items.some((i) => list.some((f) => f.id === i.id));
+  const pasted = pasteFurniture(list, items, here ? { x: 300, y: 300 } : { x: 0, y: 0 });
+  list.push(...pasted);
+  if (mode.value !== 'furniture') setMode('furniture');
+  sel.value = { kind: 'furniture', id: pasted[0].id };
+  return pasted;
+}
+
+function duplicateOpening(op: Opening) {
+  const copy = pasteOpening(op, draft.id, op.wallIndex, wallLenNow(op.wallIndex), ops.value);
+  ops.value.splice(ops.value.indexOf(op) + 1, 0, copy);
+  sel.value = { kind: 'opening', id: copy.id };
+}
+
+function copySelected(): boolean {
+  const s = sel.value;
+  if (s?.kind === 'furniture') {
+    const f = draft.furniture?.find((x) => x.id === s.id);
+    if (!f) return false;
+    copyToClipboard({ kind: 'furniture', items: [f] });
+    note(`Copied ${f.name}`);
+    return true;
+  }
+  if (s?.kind === 'opening') {
+    const op = ops.value.find((o) => o.id === s.id);
+    if (!op) return false;
+    copyToClipboard({ kind: 'opening', items: [op] });
+    note(`Copied the ${op.type}`);
+    return true;
+  }
+  return false;
+}
+
+function copyGroup(name: string) {
+  copyToClipboard({ kind: 'furniture', items: (draft.furniture ?? []).filter((f) => f.group === name) });
+  note(`Copied the group ${name}`);
+}
+
+/** Pastes what was copied, here or in another room. A door goes on the selected wall. */
+function paste(): boolean {
+  const c = clipboard();
+  if (!c?.items.length) return false;
+  if (c.kind === 'furniture') {
+    // The next paste lands a step further on.
+    copyToClipboard({ kind: 'furniture', items: addFurnitureCopies(c.items) });
+    return true;
+  }
+  if (c.kind !== 'opening' || n.value === 0) return false;
+  const s = sel.value;
+  const wall = s?.kind === 'wall' ? s.index : Math.min(c.items[0].wallIndex, n.value - 1);
+  const copy = pasteOpening(c.items[0], draft.id, wall, wallLenNow(wall), ops.value);
+  ops.value.push(copy);
+  copyToClipboard({ kind: 'opening', items: [copy] });
+  if (mode.value !== 'layout') setMode('layout');
+  sel.value = { kind: 'opening', id: copy.id };
+  return true;
+}
+
+function duplicateSelected(): boolean {
+  const s = sel.value;
+  if (s?.kind === 'furniture') {
+    const f = draft.furniture?.find((x) => x.id === s.id);
+    if (f) addFurnitureCopies([f]);
+    return !!f;
+  }
+  if (s?.kind === 'opening') {
+    const op = ops.value.find((o) => o.id === s.id);
+    if (op) duplicateOpening(op);
+    return !!op;
+  }
+  return false;
+}
+
+function setGroup(f: Furniture, name: string) {
+  const g = name.trim();
+  if (g) f.group = g;
+  else delete f.group;
+}
+
+function ungroup(name: string) {
+  for (const f of draft.furniture ?? []) if (f.group === name) delete f.group;
+}
+
+function turnGroupOf(f: Furniture) {
+  turnGroup(groupOf(draft.furniture ?? [], f), 90);
+}
+
 // ---- notes & files ------------------------------------------------------------
 
 const originalFileIds = new Set(props.attachments.map((a) => fileIdOf(a.uri)).filter((x): x is string => !!x));
@@ -626,6 +743,60 @@ onBeforeUnmount(() => {
   removeEventListener('beforeunload', onBeforeUnload);
 });
 
+// ---- undo / redo (this editing session only) ---------------------------------------
+
+const edits = useEditHistory(
+  () => JSON.stringify([draft, ops.value, patches.value]),
+  (s) => {
+    const [d, o, p] = JSON.parse(s) as [Room, Opening[], WallTypePatch[]];
+    const target = draft as unknown as Record<string, unknown>;
+    for (const k of Object.keys(target)) if (!(k in d)) delete target[k];
+    Object.assign(draft, d);
+    ops.value = o;
+    patches.value = p;
+    if (!selectionExists()) sel.value = null;
+  },
+);
+watch(() => [draft, ops.value, patches.value], edits.changed, { deep: true });
+
+/** A drag is one step: nothing is recorded while the mouse or a finger is down. */
+const pressDown = () => edits.hold(true);
+const pressUp = () => edits.hold(false);
+onMounted(() => {
+  addEventListener('pointerdown', pressDown, { capture: true });
+  addEventListener('pointerup', pressUp, { capture: true });
+  addEventListener('pointercancel', pressUp, { capture: true });
+});
+onBeforeUnmount(() => {
+  edits.dispose();
+  removeEventListener('pointerdown', pressDown, { capture: true });
+  removeEventListener('pointerup', pressUp, { capture: true });
+  removeEventListener('pointercancel', pressUp, { capture: true });
+});
+
+/** After an undo, the selected thing may not be there any more. */
+function selectionExists(): boolean {
+  const s = sel.value;
+  if (!s) return true;
+  switch (s.kind) {
+    case 'wall':
+    case 'corner':
+      return s.index < draft.walls.length;
+    case 'diagonal':
+      return s.index < draft.diagonals.length;
+    case 'opening':
+      return ops.value.some((o) => o.id === s.id);
+    case 'furniture':
+      return !!draft.furniture?.some((f) => f.id === s.id);
+    case 'pin':
+      return !!draft.pins?.some((p) => p.id === s.id);
+    case 'stair':
+      return !!draft.stairs?.some((x) => x.id === s.id);
+    case 'fixed':
+      return !!draft.fixed?.some((x) => x.id === s.id);
+  }
+}
+
 // ---- keyboard -----------------------------------------------------------------
 
 const startState = JSON.stringify([draft, ops.value, atts.value]);
@@ -633,15 +804,22 @@ const changed = () => JSON.stringify([draft, ops.value, atts.value]) !== startSt
 
 function nudgeSelected(dx: number, dy: number): boolean {
   const s = sel.value;
+  if (s?.kind === 'furniture') {
+    const f = draft.furniture?.find((x) => x.id === s.id);
+    if (!f) return false;
+    for (const m of groupOf(draft.furniture ?? [], f)) {
+      m.x_mm += dx;
+      m.y_mm += dy;
+    }
+    return true;
+  }
   const item =
-    s?.kind === 'furniture'
-      ? draft.furniture?.find((f) => f.id === s.id)
-      : s?.kind === 'pin'
-        ? draft.pins?.find((p) => p.id === s.id)
-        : s?.kind === 'stair'
-          ? draft.stairs?.find((x) => x.id === s.id)
-          : s?.kind === 'fixed'
-            ? draft.fixed?.find((x) => x.id === s.id)
+    s?.kind === 'pin'
+      ? draft.pins?.find((p) => p.id === s.id)
+      : s?.kind === 'stair'
+        ? draft.stairs?.find((x) => x.id === s.id)
+        : s?.kind === 'fixed'
+          ? draft.fixed?.find((x) => x.id === s.id)
           : undefined;
   if (!item) return false;
   item.x_mm += dx;
@@ -691,6 +869,21 @@ useKeydown((e) => {
     else requestClose();
     return;
   }
+  if (!isTyping(e) && ctrlOrCmd(e) && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (k === 'z' || k === 'y') {
+      e.preventDefault();
+      if (k === 'z' && !e.shiftKey) edits.undo();
+      else edits.redo();
+      return;
+    }
+  }
+  if (!isTyping(e) && ctrlOrCmd(e) && !e.altKey && !e.shiftKey) {
+    const k = e.key.toLowerCase();
+    const done = k === 'c' ? copySelected() : k === 'v' ? paste() : k === 'd' ? duplicateSelected() : false;
+    if (done) e.preventDefault();
+    if (k === 'c' || k === 'v' || k === 'd') return;
+  }
   if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return;
   const step = e.shiftKey ? 100 : 10;
   const arrows: Record<string, [number, number]> = {
@@ -733,6 +926,8 @@ useKeydown((e) => {
       <button class="btn ghost" @click="requestClose">Cancel</button>
       <input v-model="draft.name" class="title-input" aria-label="Room name" />
       <span class="mode-chip" :title="`Editing: ${modeTitle[mode]}`">{{ modeTitle[mode] }}</span>
+      <button class="btn ghost" aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" :disabled="!edits.canUndo.value" @click="edits.undo()">↶</button>
+      <button class="btn ghost" aria-label="Redo (Ctrl+Y)" title="Redo (Ctrl+Y)" :disabled="!edits.canRedo.value" @click="edits.redo()">↷</button>
       <button class="btn ghost kbd-only" aria-label="Keyboard shortcuts (?)" title="Keyboard shortcuts (?)" @click="showHelp = true">⌨</button>
       <button class="btn primary" title="Save (Ctrl+S)" @click="save">Save</button>
     </header>
@@ -772,7 +967,7 @@ useKeydown((e) => {
         />
       </div>
       <div class="plan-strip">
-        <p class="status" :class="{ ok: status.ok }">{{ status.text }}</p>
+        <p class="status" :class="{ ok: status.ok }">{{ copied || status.text }}</p>
         <button class="btn small" title="Hide or resize the plan (P)" @click="setPlanSize(nextSize[planSize])">
           {{ sizeLabel[planSize] }}
         </button>
@@ -1083,7 +1278,12 @@ useKeydown((e) => {
                 Glass
               </label>
             </template>
-            <button class="btn icon" aria-label="Remove" @click="ops.splice(i, 1), (sel = null)">✕</button>
+            <button class="btn icon" aria-label="Duplicate" title="Duplicate (Ctrl+D)" @click="duplicateOpening(o)"><AppIcon name="copy" /></button>
+            <span class="order-buttons">
+              <button class="btn icon" aria-label="Move up the list" :disabled="i === 0" @click="moveInList(ops, i, -1)">↑</button>
+              <button class="btn icon" aria-label="Move down the list" :disabled="i === ops.length - 1" @click="moveInList(ops, i, 1)">↓</button>
+            </span>
+            <button class="btn icon" aria-label="Remove" title="Remove" @click="ops.splice(i, 1), (sel = null)"><AppIcon name="trash" /></button>
             <small v-if="!fits(o)" class="residual bad-text">
               Runs past the end of W{{ o.wallIndex + 1 }} ({{ formatLength(wallLen(o.wallIndex), unit) }} {{ unit }})
             </small>
@@ -1118,7 +1318,7 @@ useKeydown((e) => {
             <NumField v-if="s.kind === 'stairs'" v-model="s.steps" kind="deg" label="Steps" />
             <NumField v-model="s.rotation_deg" kind="deg" label="Turn °" />
             <button class="btn icon" aria-label="Turn 90°" @click="s.rotation_deg = normDeg(s.rotation_deg + 90)">⟳</button>
-            <button class="btn icon danger" aria-label="Remove" @click="removeStair(s.id)">✕</button>
+            <button class="btn icon danger" aria-label="Remove" title="Remove" @click="removeStair(s.id)"><AppIcon name="trash" /></button>
             <small class="residual">{{ s.kind === 'stairs' ? stepText(s) : slopeText(s) }}</small>
           </div>
           <div class="row-actions">
@@ -1170,7 +1370,7 @@ useKeydown((e) => {
             />
             <NumField v-model="f.rotation_deg" kind="deg" label="Turn °" />
             <button class="btn icon" aria-label="Turn 90°" @click="f.rotation_deg = normDeg(f.rotation_deg + 90)">⟳</button>
-            <button class="btn icon danger" aria-label="Remove" @click="removeFixed(f.id)">✕</button>
+            <button class="btn icon danger" aria-label="Remove" title="Remove" @click="removeFixed(f.id)"><AppIcon name="trash" /></button>
           </div>
           <div class="row-actions">
             <select v-model="fixedKind" aria-label="Kind to add">
@@ -1206,7 +1406,7 @@ useKeydown((e) => {
             <div class="pin-head">
               <span class="pin-dot">{{ i + 1 }}</span>
               <input v-model="p.title" :data-pin-title="p.id" placeholder="Title, e.g. Fuse box" />
-              <button class="btn icon danger" aria-label="Delete note" @click.stop="removePin(p.id)">✕</button>
+              <button class="btn icon danger" aria-label="Delete note" title="Delete note" @click.stop="removePin(p.id)"><AppIcon name="trash" /></button>
             </div>
             <textarea v-model="p.text" rows="2" placeholder="What's here, how it was built…"></textarea>
             <AttachmentsPanel
@@ -1257,7 +1457,7 @@ useKeydown((e) => {
           </div>
           <p v-if="!draft.furniture?.length" class="hint">No furniture in this room yet.</p>
           <div
-            v-for="f in draft.furniture ?? []"
+            v-for="(f, i) in draft.furniture ?? []"
             :key="f.id"
             class="furniture-row"
             :class="{ active: isActive('furniture', f.id) }"
@@ -1266,6 +1466,27 @@ useKeydown((e) => {
             <label class="field name">
               <span class="field-label">Name</span>
               <input v-model="f.name" :data-furn="f.id" />
+            </label>
+            <label class="field">
+              <span class="field-label">Group</span>
+              <input
+                :value="f.group ?? ''"
+                list="fp-furniture-groups"
+                placeholder="none"
+                @change="setGroup(f, ($event.target as HTMLInputElement).value)"
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">Colour</span>
+              <span class="color-field">
+                <input
+                  type="color"
+                  :value="f.color ?? '#ffffff'"
+                  :aria-label="`Colour of ${f.name}`"
+                  @input="f.color = ($event.target as HTMLInputElement).value"
+                />
+                <button v-if="f.color" class="btn icon small" aria-label="No colour" title="No colour" @click="delete f.color">✕</button>
+              </span>
             </label>
             <NumField v-model="f.width_mm" :kind="unit" label="Width" />
             <NumField v-model="f.depth_mm" :kind="unit" label="Depth" />
@@ -1284,11 +1505,34 @@ useKeydown((e) => {
             <NumField v-model="f.x_mm" :kind="unit" label="X" />
             <NumField v-model="f.y_mm" :kind="unit" label="Y" />
             <NumField v-model="f.rotation_deg" kind="deg" label="Turn °" />
-            <button class="btn icon" aria-label="Turn 90°" @click="f.rotation_deg = normDeg(f.rotation_deg + 90)">
+            <button class="btn icon" aria-label="Turn 90°" title="Turn 90° (R)" @click="f.rotation_deg = normDeg(f.rotation_deg + 90)">
               ⟳
             </button>
-            <button class="btn icon danger" aria-label="Remove" @click="removeFurniture(f.id)">✕</button>
+            <button class="btn icon" aria-label="Duplicate" title="Duplicate (Ctrl+D)" @click="addFurnitureCopies([f])"><AppIcon name="copy" /></button>
+            <span class="order-buttons">
+              <button class="btn icon" aria-label="Move up the list" title="Up the list (drawn below)" :disabled="i === 0" @click="moveInList(draft.furniture!, i, -1)">↑</button>
+              <button
+                class="btn icon"
+                aria-label="Move down the list"
+                title="Down the list (drawn on top)"
+                :disabled="i === (draft.furniture?.length ?? 0) - 1"
+                @click="moveInList(draft.furniture!, i, 1)"
+              >
+                ↓
+              </button>
+            </span>
+            <button class="btn icon danger" aria-label="Remove" title="Remove" @click="removeFurniture(f.id)"><AppIcon name="trash" /></button>
+            <div v-if="f.group && isActive('furniture', f.id)" class="row-extra">
+              <small>Group {{ f.group }}: {{ groupCount(f.group) }} pieces, they move together</small>
+              <button class="btn small" @click="turnGroupOf(f)">⟳ Turn group</button>
+              <button class="btn small" @click="addFurnitureCopies(groupOf(draft.furniture ?? [], f))"><AppIcon name="copy" /> Duplicate group</button>
+              <button class="btn small" @click="copyGroup(f.group)">Copy group</button>
+              <button class="btn small" @click="ungroup(f.group)">Ungroup</button>
+            </div>
           </div>
+          <datalist id="fp-furniture-groups">
+            <option v-for="g in groupList" :key="g" :value="g" />
+          </datalist>
         </section>
       </template>
 

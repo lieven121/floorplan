@@ -53,10 +53,14 @@ import {
   newPoint,
   pointInfo,
   removePoint,
+  type ElecPoint,
+  pastePoints,
   toggleLink,
 } from '../model/electrical';
 import { checkInstallation } from '../electrical/arei';
 import { roomNameFn } from '../electrical/rooms';
+import { clipboard, copyToClipboard } from '../model/clipboard';
+import AppIcon from './AppIcon.vue';
 import type { EditorMode, WallTypePatch } from './editorTypes';
 import { MODES, type AppMode, modeInfo } from './modes';
 
@@ -92,13 +96,13 @@ const hint = computed(() => {
       ? 'Tap where the fuse box hangs'
       : placingKind.value
         ? 'Tap the plan to place it · tap the button again to stop'
-        : `Pick a symbol, then tap the plan · drag points to move them${tail}`;
+        : `Pick a symbol, then tap the plan · drag points to move them (they line up; Ctrl: free, Shift: straight, Alt: distances)${tail}`;
   if (mode.value === 'utilities')
     return utilTool.value?.type === 'point'
       ? 'Tap the plan to place it · tap the button again to stop'
       : utilTool.value
         ? ''
-        : `Pick a symbol or a pipe, then tap the plan · drag points to move them${tail}`;
+        : `Pick a symbol or a pipe, then tap the plan · drag points to move them (they line up; Ctrl: free, Shift: straight, Alt: distances)${tail}`;
   if (mode.value === 'furniture') return `Double-tap a room to place its furniture${tail}`;
   return `Tap a note dot to read it · double-tap a room to open its notes${tail}`;
 });
@@ -219,6 +223,35 @@ function deletePoint() {
   removePoint(e, pointId.value);
   pointId.value = null;
   linking.value = null;
+}
+
+/** Copies of points, 30 cm to the right when the originals are on this floor. */
+function addPointCopies(points: ElecPoint[]): ElecPoint[] {
+  const e = elec.value;
+  if (!e || readonly.value || !points.length) return [];
+  const here = points.some((p) => p.floorId === floorId.value && e.points.some((q) => q.id === p.id));
+  const copies = pastePoints(e, points, floorId.value, here ? { x: 300, y: 0 } : { x: 0, y: 0 });
+  linking.value = null;
+  pointId.value = copies[0]?.id ?? null;
+  return copies;
+}
+
+function duplicatePoint() {
+  if (selectedPoint.value) addPointCopies([selectedPoint.value]);
+}
+
+function copyPoint(): boolean {
+  if (!selectedPoint.value) return false;
+  copyToClipboard({ kind: 'point', items: [selectedPoint.value] });
+  return true;
+}
+
+function pastePoint(): boolean {
+  const c = clipboard();
+  if (c?.kind !== 'point' || readonly.value) return false;
+  // The next paste lands a step further on.
+  copyToClipboard({ kind: 'point', items: addPointCopies(c.items) });
+  return true;
 }
 
 // ---- switches ↔ lights ----
@@ -733,7 +766,10 @@ useKeydown((e) => {
     const k = e.key.toLowerCase();
     if (k === 'z' && !e.shiftKey && !isTyping(e)) undo();
     else if ((k === 'y' || (k === 'z' && e.shiftKey)) && !isTyping(e)) redo();
-    else if (k === 'e') showExport.value = true;
+    else if (mode.value === 'electrical' && (k === 'c' || k === 'v' || k === 'd') && !isTyping(e)) {
+      const done = k === 'c' ? copyPoint() : k === 'v' ? pastePoint() : (duplicatePoint(), !!pointId.value);
+      if (!done) return;
+    } else if (k === 'e') showExport.value = true;
     else if (k === 's') void saveNow(); // already saved automatically; just don't open the browser's dialog
     else return;
     e.preventDefault();
@@ -1129,7 +1165,8 @@ function setHeight(e: Event) {
           <strong>{{ selectedPoint.label || pointInfo(selectedPoint.kind).label }}</strong>
           <small>{{ roomName(selectedPoint) ?? 'Not in a room' }}</small>
           <span class="spacer"></span>
-          <button class="btn ghost small danger" aria-label="Delete this point" title="Delete (Del)" @click="deletePoint">🗑</button>
+          <button v-if="!readonly" class="btn ghost small" aria-label="Duplicate this point" title="Duplicate (Ctrl+D)" @click="duplicatePoint"><AppIcon name="copy" /></button>
+          <button class="btn ghost small danger" aria-label="Delete this point" title="Delete (Del)" @click="deletePoint"><AppIcon name="trash" /></button>
           <button class="btn ghost small" aria-label="Close" title="Close (Esc)" @click="pointId = null">✕</button>
         </div>
         <div class="panel-grid">
@@ -1239,7 +1276,7 @@ function setHeight(e: Event) {
           <button v-for="m in editModes" :key="m.id" class="menu-item" @click="editRoom(selectedRoom, m.editor)">
             {{ m.icon }} Edit {{ m.label.toLowerCase() }}
           </button>
-          <button class="menu-item danger" @click="deleteRoom(selectedRoom)">🗑 Delete room</button>
+          <button class="menu-item danger" @click="deleteRoom(selectedRoom)"><AppIcon name="trash" /> Delete room</button>
         </div>
       </div>
 

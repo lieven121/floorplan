@@ -19,6 +19,9 @@ import {
 } from '../geometry/floor';
 import { add, angleDeg, centroid, sub, type Vec } from '../geometry/vec';
 import { type PressHandler, usePanZoom, useStoredFlag } from '../composables/usePanZoom';
+import { useDragKeys } from '../composables/useDragKeys';
+import { type Seg, pointClearances, snapPoint } from '../geometry/snap';
+import SnapOverlay from './SnapOverlay.vue';
 import PlanContent from './PlanContent.vue';
 import ViewMenu from './ViewMenu.vue';
 import ZoomControls from './ZoomControls.vue';
@@ -121,6 +124,81 @@ const floorBoards = computed(() =>
 /** Symbols stay readable when zoomed out. */
 const symbolR = computed(() => Math.max(80, 7 * pz.view.value.s));
 
+// ---- lining up points (electrical and utilities) ----
+const pointGuides = ref<Seg[]>([]);
+/** Alt held: distances from the point to the walls. Escape: cancel a drag. */
+const altHeld = useDragKeys(
+  () => pz.cancelDrag(),
+  () => wiring.value || plumbing.value,
+);
+
+/** Inside faces of the walls of the closed rooms on this floor. */
+const floorWalls = computed<Seg[]>(() =>
+  props.rooms.flatMap((r) => {
+    const g = roomGeometry(r);
+    if (!g.solved.closed) return [];
+    const m = g.inner.length;
+    return g.inner.map((a, k) => [a, g.inner[(k + 1) % m]] as Seg);
+  }),
+);
+
+/** What a dragged point can line up with: the other points and fuse boxes on this floor, and the room corners. */
+function anchors(skip: string): Vec[] {
+  const here = <T extends { floorId: string; id: string }>(list: T[] | undefined) =>
+    (list ?? []).filter((p) => p.floorId === props.floorId && p.id !== skip);
+  return [
+    ...here(props.electrical?.points).map((p) => ({ x: p.x_mm, y: p.y_mm })),
+    ...(props.electrical?.boards ?? [])
+      .filter((b) => b.id !== skip && b.location?.floorId === props.floorId)
+      .map((b) => ({ x: b.location!.x_mm, y: b.location!.y_mm })),
+    ...here(props.utilities?.points).map((p) => ({ x: p.x_mm, y: p.y_mm })),
+    ...props.rooms.flatMap((r) => roomGeometry(r).inner),
+  ];
+}
+
+/**
+ * Where a dragged point goes: onto a nearby wall and lined up with other
+ * points (Ctrl or Cmd: anywhere), Shift: only across or only up and down.
+ */
+function dragPoint(start: Vec, world: Vec, w: Vec, e: PointerEvent, others: Vec[]): Vec {
+  altHeld.value = e.altKey;
+  const shift = sub(w, world);
+  const axis = !e.shiftKey ? null : Math.abs(shift.x) >= Math.abs(shift.y) ? 'x' : 'y';
+  if (axis === 'x') shift.y = 0;
+  if (axis === 'y') shift.x = 0;
+  let p = add(start, shift);
+  pointGuides.value = [];
+  if (!(e.ctrlKey || e.metaKey)) {
+    const s = snapPoint(p, others, floorWalls.value, 8 * pz.view.value.s);
+    p = axis === 'x' ? { x: s.p.x, y: p.y } : axis === 'y' ? { x: p.x, y: s.p.y } : s.p;
+    pointGuides.value = axis ? [] : s.guides;
+  }
+  if (axis) {
+    const far = 100_000;
+    pointGuides.value.push(
+      axis === 'x' ? [{ x: start.x - far, y: start.y }, { x: start.x + far, y: start.y }] : [{ x: start.x, y: start.y - far }, { x: start.x, y: start.y + far }],
+    );
+  }
+  return { x: Math.round(p.x), y: Math.round(p.y) };
+}
+
+/** Alt: distances from the dragged or selected point to the walls. */
+const pointDistances = computed(() => {
+  if (!altHeld.value) return [];
+  let p: Vec | undefined;
+  if (wiring.value) {
+    const d = ptDrag.value;
+    const q = props.electrical?.points.find((x) => x.id === props.pointId);
+    p = d ? { x: d.x, y: d.y } : q && { x: q.x_mm, y: q.y_mm };
+  } else if (plumbing.value) {
+    const d = uDrag.value;
+    const sel = props.utilSel;
+    const q = sel?.type === 'point' ? props.utilities?.points.find((x) => x.id === sel.id) : undefined;
+    p = d?.type === 'point' ? { x: d.x, y: d.y } : q && { x: q.x_mm, y: q.y_mm };
+  }
+  return p ? pointClearances(p, floorWalls.value) : [];
+});
+
 function pressElectrical(e: PointerEvent, world: Vec): PressHandler | null {
   const target = e.target as Element;
   if (props.placing) return { end: (moved) => !moved && emit('placePoint', world.x, world.y) };
@@ -132,9 +210,11 @@ function pressElectrical(e: PointerEvent, world: Vec): PressHandler | null {
       ? props.electrical!.boards.find((b) => b.id === id)!.location!
       : props.electrical!.points.find((p) => p.id === id)!;
     if (!isBoard) emit('selectPoint', id);
+    const others = anchors(id);
+    const from = { x: start.x_mm, y: start.y_mm };
     return {
-      move(w) {
-        ptDrag.value = { id, x: Math.round(start.x_mm + w.x - world.x), y: Math.round(start.y_mm + w.y - world.y), board: isBoard };
+      move(w, ev) {
+        ptDrag.value = { id, ...dragPoint(from, world, w, ev, others), board: isBoard };
       },
       end(moved) {
         const d = ptDrag.value;
@@ -142,6 +222,11 @@ function pressElectrical(e: PointerEvent, world: Vec): PressHandler | null {
         else if (moved && d) emit('movePoint', id, d.x, d.y);
         else if (!moved && isBoard) emit('openBoard', id);
         ptDrag.value = null;
+        pointGuides.value = [];
+      },
+      cancel() {
+        ptDrag.value = null;
+        pointGuides.value = [];
       },
     };
   }
@@ -215,6 +300,7 @@ function pressUtility(e: PointerEvent, world: Vec): PressHandler | null {
         if (moved && d) emit('utilMoveCorner', id, index, d.x, d.y);
         uDrag.value = null;
       },
+      cancel: () => (uDrag.value = null),
     };
   }
   const ptEl = target.closest('[data-upoint]');
@@ -222,13 +308,19 @@ function pressUtility(e: PointerEvent, world: Vec): PressHandler | null {
     const id = ptEl.getAttribute('data-upoint')!;
     const start = props.utilities!.points.find((p) => p.id === id)!;
     emit('update:utilSel', { type: 'point', id });
+    const others = anchors(id);
+    const from = { x: start.x_mm, y: start.y_mm };
     return {
-      move: (w) =>
-        (uDrag.value = { type: 'point', id, index: 0, x: Math.round(start.x_mm + w.x - world.x), y: Math.round(start.y_mm + w.y - world.y) }),
+      move: (w, ev) => (uDrag.value = { type: 'point', id, index: 0, ...dragPoint(from, world, w, ev, others) }),
       end(moved) {
         const d = uDrag.value;
         if (moved && d) emit('utilMovePoint', id, d.x, d.y);
         uDrag.value = null;
+        pointGuides.value = [];
+      },
+      cancel() {
+        uDrag.value = null;
+        pointGuides.value = [];
       },
     };
   }
@@ -363,6 +455,7 @@ function onPress(e: PointerEvent, world: Vec): PressHandler | null {
         if (moved && drag.value) emit('move', drag.value.roomId, drag.value.origin, drag.value.rotation_deg);
         drag.value = null;
       },
+      cancel: () => (drag.value = null),
     };
   }
 
@@ -382,6 +475,7 @@ function onPress(e: PointerEvent, world: Vec): PressHandler | null {
         if (moved && opDrag.value) emit('moveOpening', op.id, opDrag.value.wallIndex, opDrag.value.offset_mm);
         opDrag.value = null;
       },
+      cancel: () => (opDrag.value = null),
     };
   }
 
@@ -412,6 +506,7 @@ function onPress(e: PointerEvent, world: Vec): PressHandler | null {
       drag.value = null;
       tapRoom(room.id, moved);
     },
+    cancel: () => (drag.value = null),
   };
 }
 
@@ -610,6 +705,14 @@ defineExpose({
           {{ handle.label }}{{ drag.aligned ? ' aligned' : '' }}
         </text>
       </g>
+      <SnapOverlay
+        v-if="wiring || plumbing"
+        :guides="pointGuides"
+        :clearances="pointDistances"
+        :unit="unit"
+        :px="pz.view.value.s"
+        :accent="accent"
+      />
     </svg>
     <ZoomControls
       :view-open="showView"

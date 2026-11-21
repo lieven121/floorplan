@@ -52,7 +52,10 @@ The house in 3D: walls with their door and window openings, sloped ceilings, sta
 
 ### Notes, furniture and export
 - **Notes and photos:** numbered note dots anywhere in a room, each with text, photos and documents (photos need the server).
-- **Furniture** from a list of common sizes, dragged and turned in the room, with its height and how high above the floor it hangs (wall cupboards and shelves are dashed on the plan).
+- **Furniture** from a list of common sizes, dragged and turned in the room, with its height and how high above the floor it hangs (wall cupboards and shelves are dashed on the plan). While you drag, a piece lines up with the walls and with the edges and centres of other pieces (Ctrl: free, Shift: in a straight line); hold Alt to see its distance to the walls and furniture around it. Give pieces a colour, and put them in a group (a table and its chairs) to move and turn them together.
+- **Lining up electrical and utility points:** a dragged socket, switch, tap or radiator snaps onto a nearby wall and lines up with other points and room corners (Ctrl: free, Shift: in a straight line, Alt: distances to the walls).
+- **Copy and paste** furniture, doors, windows and electrical points (Ctrl+C, Ctrl+V, Ctrl+D or the duplicate button), also into another room or floor, and put the lists in your own order.
+- **Undo and redo** in the room editor (Ctrl+Z, Ctrl+Y), back to when you opened the room; Escape while dragging puts a piece back.
 - **Export:** PDF to scale (1:50, 1:100, … on A4 or A3, with a scale bar to check with a ruler), PNG, JPG, SVG, and the whole project as one JSON file (with the photos) to import again later. Choose what each export shows.
 - **Keyboard shortcuts** on a desktop (press `?`), undo and redo.
 

@@ -195,6 +195,10 @@ export interface Furniture {
   height_mm?: number;
   /** Bottom of the piece above the room's floor, e.g. 1400 for a wall cupboard. Missing: on the floor. */
   elevation_mm?: number;
+  /** Colour on the plan and in 3D, as #rrggbb. Missing: the usual grey. */
+  color?: string;
+  /** Pieces with the same group name move together, e.g. a table and its chairs. */
+  group?: string;
 }
 
 export type OpeningType = 'door' | 'window' | 'opening';

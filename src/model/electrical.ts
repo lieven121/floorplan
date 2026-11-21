@@ -466,6 +466,29 @@ export function toggleLink(a: ElecPoint, b: ElecPoint): boolean {
 }
 
 /** Removes a point and every link to it. */
+/**
+ * Copies of `points` on `floorId`, moved by `offset` mm, added to the
+ * installation. A copied switch controls the same lights, a copied light is on
+ * the same switches (both only when those are still there).
+ */
+export function pastePoints(e: Electrical, points: ElecPoint[], floorId: Id, offset: { x: number; y: number }): ElecPoint[] {
+  const out: ElecPoint[] = [];
+  for (const src of points) {
+    const p: ElecPoint = { ...JSON.parse(JSON.stringify(src)), id: uid(), floorId };
+    p.x_mm = Math.round(src.x_mm + offset.x);
+    p.y_mm = Math.round(src.y_mm + offset.y);
+    const exists = (id: Id) => e.points.some((q) => q.id === id);
+    if (p.controls) {
+      p.controls = p.controls.filter(exists);
+      if (!p.controls.length) delete p.controls;
+    }
+    for (const q of e.points) if (q.controls?.includes(src.id)) q.controls.push(p.id);
+    e.points.push(p);
+    out.push(p);
+  }
+  return out;
+}
+
 export function removePoint(e: Electrical, id: Id) {
   e.points = e.points.filter((p) => p.id !== id);
   for (const p of e.points) {

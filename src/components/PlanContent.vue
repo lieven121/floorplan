@@ -200,6 +200,8 @@ interface FurnitureItem {
   fontSize: number;
   /** Hangs above the floor (wall cupboard, shelf): drawn dashed, like on building plans. */
   raised: boolean;
+  fill: string;
+  line: string;
 }
 
 /**
@@ -300,6 +302,13 @@ const pinItems = computed(() =>
     : [],
 );
 
+/** `hex` mixed with white (45 % colour), as a plain value that exports keep. */
+function pale(hex: string): string {
+  const v = parseInt(hex.slice(1), 16);
+  const ch = (shift: number) => Math.round(255 - (255 - ((v >> shift) & 255)) * 0.45);
+  return `rgb(${ch(16)}, ${ch(8)}, ${ch(0)})`;
+}
+
 const furnitureItems = computed<FurnitureItem[]>(() =>
   !props.showFurniture
     ? []
@@ -328,6 +337,9 @@ const furnitureItems = computed<FurnitureItem[]>(() =>
         labelAngle: r1(upright(f.width_mm >= f.depth_mm ? angle : angle + 90)),
         fontSize: Math.max(60, Math.min(110, Math.min(f.width_mm, f.depth_mm) / 4)),
         raised: (f.elevation_mm ?? 0) > 0,
+        // A colour is drawn pale, so the name stays readable.
+        fill: f.color ? pale(f.color) : PLAN.furniture,
+        line: f.color ?? PLAN.furnitureLine,
       };
     }),
   ),
@@ -353,6 +365,8 @@ interface OpeningItem {
   panels: { points: string; glass: boolean }[];
   /** Sliding door: which way the panel opens. */
   arrow: string;
+  /** Doors and passages: the floor runs on through the wall. */
+  floor: string;
 }
 
 const openingItems = computed<OpeningItem[]>(() =>
@@ -382,6 +396,7 @@ const openingItems = computed<OpeningItem[]>(() =>
       frames: [],
       panels: [],
       arrow: '',
+      floor: floorFill(g.room),
     };
     const width = o.s1 - o.s0;
     const f = op.type === 'opening' ? 0 : Math.min(Math.max(0, op.frame_mm ?? 0), width / 3);
@@ -607,50 +622,6 @@ const activeOpening = computed(() => openingItems.value.find((o) => o.id === hl.
       </text>
     </g>
 
-    <!-- furniture -->
-    <g
-      v-for="f in furnitureItems"
-      :key="f.id"
-      :data-room="f.roomId"
-      :data-furniture="furnitureEditable ? f.id : undefined"
-      :class="{ tap: furnitureEditable }"
-      :pointer-events="editable ? 'none' : undefined"
-    >
-      <ellipse
-        v-if="f.round"
-        :cx="f.c.x"
-        :cy="f.c.y"
-        :rx="f.rx"
-        :ry="f.ry"
-        :transform="`rotate(${f.angle} ${f.c.x} ${f.c.y})`"
-        :fill="PLAN.furniture"
-        :fill-opacity="f.raised ? 0 : 1"
-        :stroke="f.id === hl.furniture ? accent : PLAN.furnitureLine"
-        :stroke-width="f.id === hl.furniture ? 35 : 12"
-        :stroke-dasharray="f.raised ? '70 45' : undefined"
-      />
-      <polygon
-        v-else
-        :points="f.points"
-        :fill="PLAN.furniture"
-        :fill-opacity="f.raised ? 0 : 1"
-        :stroke="f.id === hl.furniture ? accent : PLAN.furnitureLine"
-        :stroke-width="f.id === hl.furniture ? 35 : 12"
-        :stroke-dasharray="f.raised ? '70 45' : undefined"
-      />
-      <text
-        :x="f.c.x"
-        :y="f.c.y + f.fontSize * 0.35"
-        :transform="`rotate(${f.labelAngle} ${f.c.x} ${f.c.y})`"
-        text-anchor="middle"
-        :font-size="f.fontSize"
-        :fill="PLAN.dim"
-        pointer-events="none"
-      >
-        {{ f.name }}
-      </text>
-    </g>
-
     <!-- stairs and slopes -->
     <g
       v-for="s in stairItems"
@@ -822,7 +793,7 @@ const activeOpening = computed(() => openingItems.value.find((o) => o.id === hl.
       :class="{ tap: editable || o.roomId === openingsRoomId }"
     >
       <polygon v-if="editable || o.roomId === openingsRoomId" :points="o.hit" fill="#000" fill-opacity="0" />
-      <polygon :points="o.gap" :fill="o.type === 'window' ? PLAN.paper : PLAN.floor" />
+      <polygon :points="o.gap" :fill="o.type === 'window' ? PLAN.paper : o.floor" />
       <line
         v-for="(j, i) in o.jambs"
         :key="'j' + i"
@@ -881,6 +852,50 @@ const activeOpening = computed(() => openingItems.value.find((o) => o.id === hl.
       stroke-linejoin="round"
       pointer-events="none"
     />
+
+    <!-- furniture: above walls, doors and windows, so a piece against a wall stays visible and draggable -->
+    <g
+      v-for="f in furnitureItems"
+      :key="f.id"
+      :data-room="f.roomId"
+      :data-furniture="furnitureEditable ? f.id : undefined"
+      :class="{ tap: furnitureEditable }"
+      :pointer-events="editable || f.roomId === openingsRoomId ? 'none' : undefined"
+    >
+      <ellipse
+        v-if="f.round"
+        :cx="f.c.x"
+        :cy="f.c.y"
+        :rx="f.rx"
+        :ry="f.ry"
+        :transform="`rotate(${f.angle} ${f.c.x} ${f.c.y})`"
+        :fill="f.fill"
+        :fill-opacity="f.raised ? 0 : 1"
+        :stroke="f.id === hl.furniture ? accent : f.line"
+        :stroke-width="f.id === hl.furniture ? 35 : 12"
+        :stroke-dasharray="f.raised ? '70 45' : undefined"
+      />
+      <polygon
+        v-else
+        :points="f.points"
+        :fill="f.fill"
+        :fill-opacity="f.raised ? 0 : 1"
+        :stroke="f.id === hl.furniture ? accent : f.line"
+        :stroke-width="f.id === hl.furniture ? 35 : 12"
+        :stroke-dasharray="f.raised ? '70 45' : undefined"
+      />
+      <text
+        :x="f.c.x"
+        :y="f.c.y + f.fontSize * 0.35"
+        :transform="`rotate(${f.labelAngle} ${f.c.x} ${f.c.y})`"
+        text-anchor="middle"
+        :font-size="f.fontSize"
+        :fill="PLAN.dim"
+        pointer-events="none"
+      >
+        {{ f.name }}
+      </text>
+    </g>
 
     <!-- diagonals -->
     <g v-for="d in diagonalItems" :key="d.key" :data-diagonal="editable ? d.i : undefined" :class="{ tap: editable }">

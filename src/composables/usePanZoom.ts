@@ -12,6 +12,8 @@ export interface PressHandler {
   move?(world: Vec, e: PointerEvent): void;
   /** `moved` is false for a tap. */
   end?(moved: boolean, e: PointerEvent): void;
+  /** Escape during the drag: put it back where it was. */
+  cancel?(): void;
 }
 
 export interface PanZoomOptions {
@@ -221,6 +223,16 @@ export function usePanZoom(svg: Ref<SVGSVGElement | undefined>, opts: PanZoomOpt
     } else if (g?.kind !== 'pinch') gesture = null;
   }
 
+  /** Stops the drag in progress and puts the thing back; false when nothing is being dragged. */
+  function cancelDrag(): boolean {
+    const g = gesture;
+    if (g?.kind !== 'drag' || !g.moved || !g.handler.cancel) return false;
+    g.handler.cancel();
+    // The rest of this press does nothing; letting go ends it.
+    gesture = null;
+    return true;
+  }
+
   function wheel(e: WheelEvent) {
     e.preventDefault();
     cancelAnimationFrame(anim);
@@ -237,6 +249,7 @@ export function usePanZoom(svg: Ref<SVGSVGElement | undefined>, opts: PanZoomOpt
     setView,
     fitBounds,
     zoomBy,
+    cancelDrag,
     handlers: { pointerdown, pointermove, pointerup, pointercancel: pointerup, wheel },
   };
 }
