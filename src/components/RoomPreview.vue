@@ -32,6 +32,7 @@ const emit = defineEmits<{
   moveFurniture: [id: string, x: number, y: number];
   movePin: [id: string, x: number, y: number];
   moveStair: [id: string, x: number, y: number];
+  moveFixed: [id: string, x: number, y: number];
   moveOpening: [id: string, wallIndex: number, offset_mm: number];
   place: [x: number, y: number];
 }>();
@@ -46,6 +47,7 @@ function selectionFor(el: Element): Selection | null {
   const get = (a: string) => el.getAttribute(a);
   if (get('data-pin') !== null) return { kind: 'pin', id: get('data-pin')! };
   if (get('data-stair') !== null) return { kind: 'stair', id: get('data-stair')! };
+  if (get('data-fixed') !== null) return { kind: 'fixed', id: get('data-fixed')! };
   if (get('data-furniture') !== null) return { kind: 'furniture', id: get('data-furniture')! };
   if (get('data-corner') !== null) return { kind: 'corner', index: Number(get('data-corner')) };
   if (get('data-opening') !== null) return { kind: 'opening', id: get('data-opening')! };
@@ -63,6 +65,10 @@ function draggable(sel: Selection): { start: Vec; to: (x: number, y: number) => 
   if (sel.kind === 'stair' && props.mode === 'layout') {
     const s = props.room.stairs?.find((x) => x.id === sel.id);
     return s ? { start: { x: s.x_mm, y: s.y_mm }, to: (x, y) => emit('moveStair', sel.id, x, y) } : null;
+  }
+  if (sel.kind === 'fixed' && props.mode === 'layout') {
+    const f = props.room.fixed?.find((x) => x.id === sel.id);
+    return f ? { start: { x: f.x_mm, y: f.y_mm }, to: (x, y) => emit('moveFixed', sel.id, x, y) } : null;
   }
   if (sel.kind === 'pin' && props.mode === 'notes') {
     const p = props.room.pins?.find((x) => x.id === sel.id);
@@ -85,7 +91,7 @@ function selectForDrag(sel: Selection) {
 function onPress(e: PointerEvent, world: Vec): PressHandler | null {
   if (props.placing) return { end: (moved) => !moved && place(e) }; // the tap places a note
   const el = (e.target as Element).closest(
-    '[data-pin],[data-furniture],[data-corner],[data-opening],[data-diagonal],[data-wall],[data-stair]',
+    '[data-pin],[data-furniture],[data-corner],[data-opening],[data-diagonal],[data-wall],[data-stair],[data-fixed]',
   );
   const sel = el && selectionFor(el);
   if (!sel) return null;
@@ -96,7 +102,7 @@ function onPress(e: PointerEvent, world: Vec): PressHandler | null {
       const grab = grabOffset(geom.value, op, world);
       return {
         move: (w) => {
-          const at = placeOpeningAt(geom.value, op.width_mm, w, grab);
+          const at = placeOpeningAt(geom.value, op, w, grab);
           if (at) emit('moveOpening', sel.id, at.wallIndex, at.offset_mm);
         },
         end: (moved) => !moved && emit('select', sel, true),
@@ -165,11 +171,14 @@ function selectionBounds(sel: Selection): Bounds | null {
       return p ? box([{ x: p.x_mm, y: p.y_mm }]) : null;
     }
     case 'furniture':
+    case 'fixed':
     case 'stair': {
       const f =
         sel.kind === 'furniture'
           ? props.room.furniture?.find((x) => x.id === sel.id)
-          : props.room.stairs?.map((s) => ({ ...s, depth_mm: s.width_mm, width_mm: s.length_mm })).find((x) => x.id === sel.id);
+          : sel.kind === 'fixed'
+            ? props.room.fixed?.find((x) => x.id === sel.id)
+            : props.room.stairs?.map((s) => ({ ...s, depth_mm: s.width_mm, width_mm: s.length_mm })).find((x) => x.id === sel.id);
       if (!f) return null;
       const c = { x: f.x_mm, y: f.y_mm };
       return box(
@@ -214,12 +223,13 @@ const highlight = computed(() => {
   if (s.kind === 'opening') return { opening: s.id };
   if (s.kind === 'pin') return { pin: s.id };
   if (s.kind === 'stair') return { stair: s.id };
+  if (s.kind === 'fixed') return { fixed: s.id };
   return { furniture: s.id };
 });
 
 const hint = computed(() => {
   if (props.placing) return 'Tap where the note goes';
-  if (props.mode === 'layout') return 'Tap a wall, corner, door or stairs to edit it · drag doors, windows and stairs to move them';
+  if (props.mode === 'layout') return 'Tap a wall, corner, door, stairs or chimney to edit it · drag doors, windows, stairs and chimneys to move them';
   if (props.mode === 'furniture') return 'Drag furniture to place it · tap to select';
   if (props.mode === 'notes') return 'Drag a note dot to move it · tap to select';
   return '';

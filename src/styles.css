@@ -1340,7 +1340,8 @@ input.guessed {
   background: var(--warn-bg);
   color: var(--warn-text);
 }
-.draft-dialog {
+.draft-dialog,
+.leave-dialog {
   max-width: 480px;
 }
 .share-add {
@@ -1894,6 +1895,12 @@ button.din-free:focus-visible {
 }
 
 /* ---- sloped ceilings: wall height and slope on a second line ---- */
+.wall-row .wall-actions {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .wall-row .wall-extra {
   grid-column: 2 / -1;
   display: grid;

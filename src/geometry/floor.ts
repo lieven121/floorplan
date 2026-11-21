@@ -1,5 +1,5 @@
 /** Rooms placed on a floor: wall thickness, snapping rooms together, door and window positions. */
-import type { Opening, Point, Room } from '../model/schema';
+import { type Opening, type Point, type Room, holeSize, holeSpan } from '../model/schema';
 import { type SolvedRoom, solveRoom } from './room';
 import {
   type Vec,
@@ -34,6 +34,16 @@ export interface RoomGeom {
   /** Unit normal of wall k pointing out of the room. */
   normals: Vec[];
   thickness: number[];
+  /**
+   * The footprint of wall k. Where two walls meet, the stronger one (exterior,
+   * not shared with another room, thicker) runs through the corner and the
+   * other butts against it; equal walls meet on the diagonal.
+   */
+  pieces: Vec[][];
+  /** Start and end of wall k's outside face (shorter than outer[k]..outer[k+1] where it butts). */
+  outerFace: [Vec, Vec][];
+  /** Start and end of wall k's inside face, lengthened where it runs through a corner. */
+  innerFace: [Vec, Vec][];
 }
 
 export const toWorld = (room: { origin: Point; rotation_deg: number }, p: Vec): Vec =>
@@ -42,7 +52,7 @@ export const toWorld = (room: { origin: Point; rotation_deg: number }, p: Vec): 
 export function roomGeometry(room: Room): RoomGeom {
   const solved = solveRoom(room);
   const inner = solved.points.map((p) => toWorld(room, p));
-  if (!solved.closed) return { room, solved, inner, outer: [], dirs: [], normals: [], thickness: [] };
+  if (!solved.closed) return { room, solved, inner, outer: [], dirs: [], normals: [], thickness: [], pieces: [], outerFace: [], innerFace: [] };
 
   const n = inner.length;
   const clockwise = signedArea(inner) >= 0;
@@ -57,7 +67,72 @@ export function roomGeometry(room: Room): RoomGeom {
     const x = lineIntersect(q1, dirs[j], q2, dirs[i]);
     return !x || dist(x, p) > 4 * tMax ? q2 : x;
   });
-  return { room, solved, inner, outer, dirs, normals, thickness };
+  const g: RoomGeom = { room, solved, inner, outer, dirs, normals, thickness, pieces: [], outerFace: [], innerFace: [] };
+  setJoints(g, (k) => wallRank(g, k, false));
+  return g;
+}
+
+/** Which wall runs through a corner: exterior first, then one not shared with another room, then the thicker. */
+function wallRank(g: RoomGeom, k: number, shared: boolean): number {
+  return (g.room.walls[k]?.kind === 'exterior' ? 2e6 : 0) + (shared ? 0 : 1e6) + Math.round(g.thickness[k]);
+}
+
+/** Splits every corner block between its two walls (see RoomGeom.pieces). */
+function setJoints(g: RoomGeom, rank: (k: number) => number) {
+  const n = g.inner.length;
+  const orient = signedArea(g.inner) >= 0 ? 1 : -1;
+  const tMax = Math.max(1, ...g.thickness);
+  const startEdge: Vec[][] = [];
+  const endEdge: Vec[][] = [];
+  for (let c = 0; c < n; c++) {
+    const j = (c - 1 + n) % n;
+    const i = c;
+    const p = g.inner[c];
+    const x = g.outer[c];
+    let ej: Vec[] = [p, x];
+    let si: Vec[] = [p, x];
+    const convex = cross(g.dirs[j], g.dirs[i]) * orient > 1e-6;
+    const straight = Math.abs(cross(g.dirs[j], g.dirs[i])) < 1e-6 && dot(g.dirs[j], g.dirs[i]) > 0;
+    const rj = rank(j);
+    const ri = rank(i);
+    if (straight) {
+      // A straight corner where the wall type changes: each part ends square, at its own thickness.
+      ej = [p, add(p, scale(g.normals[j], g.thickness[j]))];
+      si = [p, add(p, scale(g.normals[i], g.thickness[i]))];
+    } else if (convex && g.thickness[j] > 0 && g.thickness[i] > 0 && rj !== ri) {
+      const [strong, weak] = rj > ri ? [j, i] : [i, j];
+      // Where the strong wall's inside face meets the weak wall's outside face.
+      const q = lineIntersect(p, g.dirs[strong], add(p, scale(g.normals[weak], g.thickness[weak])), g.dirs[weak]);
+      if (q && dist(q, p) <= 4 * tMax) {
+        if (strong === j) {
+          ej = [p, q, x];
+          si = [p, q];
+        } else {
+          ej = [p, q];
+          si = [p, q, x];
+        }
+      }
+    }
+    endEdge[j] = ej;
+    startEdge[i] = si;
+  }
+  const last = (e: Vec[]) => e[e.length - 1];
+  // The inside face runs on to q where the wall goes through the corner.
+  const innerEnd = (e: Vec[]) => (e.length === 3 ? e[1] : e[0]);
+  g.pieces = g.inner.map((p, k) => [...endEdge[k], ...[...startEdge[k]].reverse()]);
+  g.outerFace = g.inner.map((_, k) => [last(startEdge[k]), last(endEdge[k])]);
+  g.innerFace = g.inner.map((_, k) => [innerEnd(startEdge[k]), innerEnd(endEdge[k])]);
+}
+
+/** All rooms of a floor; walls shared with a neighbouring room give way at corners to the walls that aren't. */
+export function floorGeometry(rooms: Room[]): RoomGeom[] {
+  const geoms = rooms.map(roomGeometry);
+  for (const g of geoms) {
+    if (!g.solved.closed) continue;
+    const shared = g.inner.map((_, k) => matchingWalls(geoms, g.room.id, k).length > 0);
+    if (shared.some(Boolean)) setJoints(g, (k) => wallRank(g, k, shared[k]));
+  }
+  return geoms;
 }
 
 export interface Bounds {
@@ -163,6 +238,9 @@ export interface OpeningGeom {
   bo: Vec;
   d: Vec;
   n: Vec;
+  /** The hole, as distance from the wall's start corner. */
+  s0: number;
+  s1: number;
   /** How deep the gap cuts: the wall thickness, or through to the neighbouring room. */
   depth: number;
   wallLength: number;
@@ -179,8 +257,9 @@ export function openingGeometry(g: RoomGeom, op: Opening, all: RoomGeom[]): Open
   const d = g.dirs[k];
   const n = g.normals[k];
   const t = g.thickness[k];
-  const a = add(P0, scale(d, op.offset_mm));
-  const b = add(a, scale(d, op.width_mm));
+  const span = holeSpan(op, wallLength);
+  const a = add(P0, scale(d, span.a));
+  const b = add(P0, scale(d, span.b));
 
   // A door in a shared wall should cut all the way through to the next room.
   let depth = t;
@@ -204,7 +283,9 @@ export function openingGeometry(g: RoomGeom, op: Opening, all: RoomGeom[]): Open
     n,
     depth,
     wallLength,
-    fits: op.offset_mm >= 0 && op.width_mm > 0 && op.offset_mm + op.width_mm <= wallLength + 1,
+    s0: span.a,
+    s1: span.b,
+    fits: op.offset_mm >= 0 && op.width_mm > 0 && span.a >= -1 && span.b <= wallLength + 1,
   };
 }
 
@@ -302,8 +383,9 @@ function distToSegment(p: Vec, a: Vec, b: Vec): number {
  * nearest wall of its room, `grab` mm from its start corner-side edge, kept
  * inside the wall and rounded to 1 cm.
  */
-export function placeOpeningAt(g: RoomGeom, width_mm: number, p: Vec, grab: number): { wallIndex: number; offset_mm: number } | null {
+export function placeOpeningAt(g: RoomGeom, op: Opening, p: Vec, grab: number): { wallIndex: number; offset_mm: number } | null {
   if (!g.solved.closed) return null;
+  const width_mm = holeSize(op).width;
   const n = g.inner.length;
   let best: { wallIndex: number; offset_mm: number; d: number } | null = null;
   for (let k = 0; k < n; k++) {
@@ -314,7 +396,10 @@ export function placeOpeningAt(g: RoomGeom, width_mm: number, p: Vec, grab: numb
     if (best && d >= best.d) continue;
     const along = dot(sub(p, a), g.dirs[k]) - grab;
     const max = Math.max(0, len - width_mm);
-    best = { wallIndex: k, offset_mm: Math.round(Math.min(max, Math.max(0, along)) / 10) * 10, d };
+    const start = Math.min(max, Math.max(0, along));
+    // Kept in the opening's own terms: from the end corner if it is measured from there.
+    const offset = op.from === 'end' ? len - start - width_mm : start;
+    best = { wallIndex: k, offset_mm: Math.max(0, Math.round(offset / 10) * 10), d };
   }
   return best && { wallIndex: best.wallIndex, offset_mm: best.offset_mm };
 }
@@ -323,8 +408,10 @@ export function placeOpeningAt(g: RoomGeom, width_mm: number, p: Vec, grab: numb
 export function grabOffset(g: RoomGeom, op: Opening, p: Vec): number {
   const a = g.inner[op.wallIndex];
   const d = g.dirs[op.wallIndex];
-  if (!a || !d) return op.width_mm / 2;
-  return Math.min(op.width_mm, Math.max(0, dot(sub(p, a), d) - op.offset_mm));
+  const span = holeSpan(op, wallLength(g, op.wallIndex));
+  const w = span.b - span.a;
+  if (!a || !d) return w / 2;
+  return Math.min(w, Math.max(0, dot(sub(p, a), d) - span.a));
 }
 
 // ---- shared walls ----------------------------------------------------------------
@@ -404,8 +491,10 @@ export function wallGaps(geoms: RoomGeom[], openings: Opening[]): Map<string, Ga
     const og = g && openingGeometry(g, op, geoms);
     if (!g || !og || !og.fits) continue;
     const base = g.room.floorLevel_mm ?? 0;
-    const gap = { sill: Math.max(0, op.sill_mm), top: op.sill_mm + op.height_mm, openingId: op.id, type: op.type };
-    push(g.room.id, op.wallIndex, { a: op.offset_mm, b: op.offset_mm + op.width_mm, ...gap, glass: op.type === 'window', behind: false });
+    const hole = holeSize(op);
+    const gap = { sill: Math.max(0, hole.sill), top: hole.sill + hole.height, openingId: op.id, type: op.type };
+    const glass = op.type === 'window' || (op.type === 'door' && !!op.glass);
+    push(g.room.id, op.wallIndex, { a: og.s0, b: og.s1, ...gap, glass, behind: false });
     // The same hole in the wall of the room behind it.
     for (const o of geoms) {
       if (o.room.id === g.room.id) continue;

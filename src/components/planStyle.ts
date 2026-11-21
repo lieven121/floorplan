@@ -7,6 +7,7 @@ export interface Highlight {
   furniture?: string | null;
   pin?: string | null;
   stair?: string | null;
+  fixed?: string | null;
 }
 
 /**
@@ -32,6 +33,8 @@ export const PLAN = {
   pin: '#e8710a',
   ok: '#188038',
   ramp: '#eef3e8',
+  /** Glass in sliding doors. */
+  glass: '#cfe6f7',
   /** Wall types, after the usual Belgian renovation colours. */
   wallNew: '#e2463a',
   wallDemolish: '#f6d32d',

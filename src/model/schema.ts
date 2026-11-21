@@ -89,6 +89,8 @@ export interface Room {
   /** Floor of this room relative to the floor level (e.g. -200: 20 cm lower). */
   floorLevel_mm?: number;
   stairs?: Stair[];
+  /** Chimneys, columns, ducts: solid parts of the building inside the room. */
+  fixed?: FixedElement[];
   notes?: string;
   /** A locked room can't be dragged or rotated on the floor view. */
   locked?: boolean;
@@ -138,6 +140,39 @@ export function newStair(kind: Stair['kind'], x_mm: number, y_mm: number): Stair
     : { id: uid(), kind, name: 'Slope', x_mm, y_mm, width_mm: 1000, length_mm: 1500, rotation_deg: 0, rise_mm: 200, steps: 0 };
 }
 
+export type FixedKind = 'chimney' | 'column' | 'duct' | 'block';
+
+/**
+ * A solid part of the building in a room (room coordinates, like furniture):
+ * a chimney breast, a column, a ventilation duct, a block of masonry.
+ */
+export interface FixedElement {
+  id: Id;
+  kind: FixedKind;
+  name: string;
+  shape: FurnitureShape;
+  /** Centre. */
+  x_mm: number;
+  y_mm: number;
+  width_mm: number;
+  depth_mm: number;
+  rotation_deg: number;
+  /** Missing: up to the ceiling. */
+  height_mm?: number;
+}
+
+export const FIXED_KINDS: { kind: FixedKind; name: string; width_mm: number; depth_mm: number }[] = [
+  { kind: 'chimney', name: 'Chimney', width_mm: 600, depth_mm: 450 },
+  { kind: 'column', name: 'Column', width_mm: 300, depth_mm: 300 },
+  { kind: 'duct', name: 'Duct', width_mm: 300, depth_mm: 300 },
+  { kind: 'block', name: 'Masonry block', width_mm: 500, depth_mm: 500 },
+];
+
+export function newFixed(kind: FixedKind, x_mm: number, y_mm: number): FixedElement {
+  const k = FIXED_KINDS.find((f) => f.kind === kind) ?? FIXED_KINDS[0];
+  return { id: uid(), kind: k.kind, name: k.name, shape: 'rect', x_mm, y_mm, width_mm: k.width_mm, depth_mm: k.depth_mm, rotation_deg: 0 };
+}
+
 /** Effective height of wall k. */
 export const wallHeight = (room: Room, k: number, fallback = 2600) =>
   room.walls[k]?.height_mm ?? room.height_mm ?? fallback;
@@ -156,6 +191,10 @@ export interface Furniture {
   width_mm: number;
   depth_mm: number;
   rotation_deg: number;
+  /** Height of the piece itself. Missing: the usual height for its kind (see furnitureHeight). */
+  height_mm?: number;
+  /** Bottom of the piece above the room's floor, e.g. 1400 for a wall cupboard. Missing: on the floor. */
+  elevation_mm?: number;
 }
 
 export type OpeningType = 'door' | 'window' | 'opening';
@@ -170,8 +209,38 @@ export interface Opening {
   height_mm: number;
   sill_mm: number;
   type: OpeningType;
-  /** Doors only. */
+  /** Doors only. For a sliding door, `hinge` is the side the moving panel slides to. */
   swing?: { hinge: 'start' | 'end'; side: 'in' | 'out' };
+  /** The corner `offset_mm` is measured from: the wall's start corner (default) or its end corner. */
+  from?: 'start' | 'end';
+  /** Width of the frame profile. */
+  frame_mm?: number;
+  /**
+   * True (default): width and height are the outside of the frame, the hole in the wall.
+   * False: they are the clear opening inside the frame.
+   */
+  sizeWithFrame?: boolean;
+  /** Doors: hinged (default) or sliding. */
+  operation?: 'hinged' | 'sliding';
+  /** Doors: a glass door (drawn as glass in 3D). */
+  glass?: boolean;
+}
+
+/**
+ * The hole an opening makes in its wall (the outside of the frame).
+ * `sill` is the bottom of the frame; a door's frame has no bottom.
+ */
+export function holeSize(op: Pick<Opening, 'width_mm' | 'height_mm' | 'sill_mm' | 'type' | 'frame_mm' | 'sizeWithFrame'>) {
+  const f = op.sizeWithFrame === false ? Math.max(0, op.frame_mm ?? 0) : 0;
+  const window = op.type === 'window';
+  return { width: op.width_mm + 2 * f, height: op.height_mm + (window ? 2 * f : f), sill: op.sill_mm };
+}
+
+/** Where the hole starts and ends, measured from the wall's start corner. */
+export function holeSpan(op: Opening, wallLength: number): { a: number; b: number } {
+  const w = holeSize(op).width;
+  const a = op.from === 'end' ? wallLength - op.offset_mm - w : op.offset_mm;
+  return { a, b: a + w };
 }
 
 export interface Floor {
@@ -334,6 +403,7 @@ export function newOpening(roomId: Id, type: OpeningType, wallIndex = 0): Openin
     sill_mm: type === 'window' ? 900 : 0,
     type,
     swing: door ? { hinge: 'start', side: 'in' } : undefined,
+    frame_mm: type === 'opening' ? undefined : 60,
   };
 }
 

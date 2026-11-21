@@ -97,3 +97,35 @@ describe('finishes, wall types and headroom', () => {
     expect(p.floors[0].rooms[0].walls[0].status).toBeUndefined();
   });
 });
+
+describe('furniture height and elevation', () => {
+  it('keeps them, and older plans get the usual height for the kind', async () => {
+    const { FURNITURE_PRESETS, furnitureHeight, newFurniture } = await import('./furniture');
+    const p = newProject('H');
+    const room = newRoom('Kitchen');
+    const cupboard = newFurniture(FURNITURE_PRESETS.find((x) => x.kind === 'wall-cabinet')!, { x: 0, y: 0 });
+    const old = { ...newFurniture(FURNITURE_PRESETS.find((x) => x.kind === 'fridge')!, { x: 0, y: 0 }), height_mm: undefined };
+    room.furniture = [cupboard, old];
+    p.floors[0].rooms.push(room);
+    const [c, f] = parseProject(serializeProject(p)).floors[0].rooms[0].furniture!;
+    expect(c).toMatchObject({ height_mm: 700, elevation_mm: 1400 });
+    expect(f.height_mm).toBeUndefined();
+    expect(f.elevation_mm).toBeUndefined();
+    expect(furnitureHeight(f)).toBe(1800);
+    expect(furnitureHeight({ kind: 'unknown' })).toBe(700);
+  });
+});
+
+describe('chimneys and columns', () => {
+  it('are kept in the file', async () => {
+    const { newFixed } = await import('./schema');
+    const p = newProject('F');
+    const room = newRoom('Living');
+    room.fixed = [{ ...newFixed('chimney', 500, 300), height_mm: 3500 }, { ...newFixed('column', 2000, 1500), shape: 'round' }];
+    p.floors[0].rooms.push(room);
+    const fixed = parseProject(serializeProject(p)).floors[0].rooms[0].fixed!;
+    expect(fixed[0]).toMatchObject({ kind: 'chimney', width_mm: 600, height_mm: 3500, x_mm: 500 });
+    expect(fixed[1]).toMatchObject({ kind: 'column', shape: 'round' });
+    expect(fixed[1].height_mm).toBeUndefined();
+  });
+});

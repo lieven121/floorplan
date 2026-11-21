@@ -7,8 +7,9 @@
 import * as THREE from 'three';
 import type { Floor, Furniture, Room, Stair, WallStatus } from '../model/schema';
 import { DEFAULT_FLOOR_3D, floorCovering } from '../model/finishes';
+import { furnitureHeight } from '../model/furniture';
 import { type Plane, ceilingCells, ceilingPlanes, wallProfile } from '../geometry/ceiling';
-import { type Gap, type RoomGeom, roomGeometry, toWorld, wallGaps } from '../geometry/floor';
+import { type Gap, type RoomGeom, floorGeometry, toWorld, wallGaps } from '../geometry/floor';
 import { type Vec, add, dot, rotate, scale, sub } from '../geometry/vec';
 
 type P3 = [number, number, number];
@@ -60,27 +61,6 @@ class Tris {
     return this.pos.length / 9;
   }
 }
-
-/** How high furniture is drawn; the plan only knows its footprint. */
-const FURNITURE_HEIGHT: Record<string, number> = {
-  'bed-double': 500,
-  'bed-single': 500,
-  sofa: 800,
-  armchair: 800,
-  table: 750,
-  'table-round': 750,
-  chair: 850,
-  desk: 750,
-  wardrobe: 2000,
-  cabinet: 900,
-  counter: 900,
-  fridge: 1800,
-  washer: 850,
-  bathtub: 550,
-  shower: 2000,
-  toilet: 420,
-  sink: 850,
-};
 
 export interface HouseOptions {
   ceilings: 'hidden' | 'glass' | 'solid';
@@ -166,8 +146,12 @@ function buildRoom(g: RoomGeom, gapsOf: (k: number) => Gap[], y0: number, opts: 
     const holes = gaps.filter((x) => x.sill > 0);
 
     const t = g.thickness[k];
-    const O = g.outer[k];
-    const Lo = t > 0 ? Math.hypot(g.outer[(k + 1) % n].x - O.x, g.outer[(k + 1) % n].y - O.y) : 0;
+    // Faces as far as this wall goes: through a corner it owns, up to the other wall where it butts.
+    const [I, I1] = t > 0 ? g.innerFace[k] : [A, A];
+    const [O, O1] = t > 0 ? g.outerFace[k] : [A, A];
+    const Li = t > 0 ? Math.hypot(I1.x - I.x, I1.y - I.y) : L;
+    const si = t > 0 ? dot(sub(A, I), d) : 0;
+    const Lo = Math.hypot(O1.x - O.x, O1.y - O.y);
     const s0 = t > 0 ? dot(sub(A, O), d) : 0;
 
     /** One face of the wall: `shift` moves the gaps and the profile along it, `len` is its length. */
@@ -196,7 +180,7 @@ function buildRoom(g: RoomGeom, gapsOf: (k: number) => Gap[], y0: number, opts: 
       return top;
     };
 
-    const topIn = face(A, 0, L);
+    const topIn = t > 0 ? face(I, si, Li) : face(A, 0, L);
     if (t <= 0) continue;
     const topOut = face(O, s0, Lo);
     const pin = (tt: number, h: number) => up(add(A, scale(d, tt)), h);
@@ -204,17 +188,15 @@ function buildRoom(g: RoomGeom, gapsOf: (k: number) => Gap[], y0: number, opts: 
     // Top of the wall.
     for (let i = 1; i < topIn.length; i++)
       wallOut.quad(
-        up(add(A, scale(d, topIn[i - 1].x)), topIn[i - 1].y),
-        up(add(A, scale(d, topIn[i].x)), topIn[i].y),
+        up(add(I, scale(d, topIn[i - 1].x)), topIn[i - 1].y),
+        up(add(I, scale(d, topIn[i].x)), topIn[i].y),
         up(add(O, scale(d, topOut[i].x)), topOut[i].y),
         up(add(O, scale(d, topOut[i - 1].x)), topOut[i - 1].y),
       );
     // Ends (hidden where the next wall is as high).
-    wallOut.quad(up(A, 0), up(O, 0), up(O, prof[0].h), up(A, prof[0].h));
-    const B = g.inner[(k + 1) % n];
-    const Bo = g.outer[(k + 1) % n];
+    wallOut.quad(up(I, 0), up(O, 0), up(O, prof[0].h), up(I, prof[0].h));
     const hB = prof[prof.length - 1].h;
-    wallOut.quad(up(B, 0), up(Bo, 0), up(Bo, hB), up(B, hB));
+    wallOut.quad(up(I1, 0), up(O1, 0), up(O1, hB), up(I1, hB));
     // The sides of each gap, and glass in the windows.
     for (const x of gaps) {
       wallOut.quad(pin(x.a, x.sill), pout(x.a, x.sill), pout(x.a, x.top), pin(x.a, x.top));
@@ -242,9 +224,10 @@ function buildStair(room: Room, s: Stair, base: number, out: Tris) {
 
 function buildFurniture(room: Room, f: Furniture, base: number, out: Tris) {
   const c = toWorld(room, { x: f.x_mm, y: f.y_mm });
-  const h = FURNITURE_HEIGHT[f.kind] ?? 700;
-  if (f.shape === 'round') out.cylinder(c, Math.min(f.width_mm, f.depth_mm) / 2, base, base + h);
-  else out.box(c, f.width_mm, f.depth_mm, f.rotation_deg + room.rotation_deg, base, base + h);
+  const y0 = base + (f.elevation_mm ?? 0);
+  const y1 = y0 + furnitureHeight(f);
+  if (f.shape === 'round') out.cylinder(c, Math.min(f.width_mm, f.depth_mm) / 2, y0, y1);
+  else out.box(c, f.width_mm, f.depth_mm, f.rotation_deg + room.rotation_deg, y0, y1);
 }
 
 /** Wall colours by status: new walls tinted red, walls to demolish see-through yellow (Belgian renovation plans). */
@@ -265,7 +248,7 @@ export function buildHouse(floors: Floor[], bases: Map<string, number>, opts: Ho
   };
   for (const floor of floors) {
     const y0 = bases.get(floor.id) ?? 0;
-    const geoms = floor.rooms.map(roomGeometry).filter((g) => g.solved.closed);
+    const geoms = floorGeometry(floor.rooms).filter((g) => g.solved.closed);
     const gaps = wallGaps(geoms, floor.openings);
     for (const g of geoms) {
       const color = floorCovering(g.room.finish?.floor)?.three ?? DEFAULT_FLOOR_3D;
@@ -277,6 +260,14 @@ export function buildHouse(floors: Floor[], bases: Map<string, number>, opts: Ho
       });
       const base = y0 + (g.room.floorLevel_mm ?? 0);
       for (const s of g.room.stairs ?? []) buildStair(g.room, s, base, out.stairs);
+      // Chimneys and columns: solid, like the walls, up to the ceiling unless they have a height.
+      for (const f of g.room.fixed ?? []) {
+        const c = toWorld(g.room, { x: f.x_mm, y: f.y_mm });
+        const top = base + (f.height_mm ?? roomHeight(g.room, opts.defaultHeight));
+        const walls = bucket(wallsByStatus, 'existing');
+        if (f.shape === 'round') walls.cylinder(c, Math.min(f.width_mm, f.depth_mm) / 2, base, top);
+        else walls.box(c, f.width_mm, f.depth_mm, f.rotation_deg + g.room.rotation_deg, base, top);
+      }
       if (opts.furniture) for (const f of g.room.furniture ?? []) buildFurniture(g.room, f, base, out.furniture);
     }
   }

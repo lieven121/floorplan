@@ -3,7 +3,7 @@
  * windows per room, with totals per floor and for the house. Pure: no DOM.
  * Lengths in mm, areas in m².
  */
-import type { Floor, Project, WallStatus } from './schema';
+import { type Floor, type Project, type WallStatus, holeSize } from './schema';
 import { floorLabel, hasSkirting } from './finishes';
 import { HEADROOM_MM, ceilingCells, ceilingPlanes, headroomArea_m2, wallProfile } from '../geometry/ceiling';
 import { type Gap, type RoomGeom, matchingWalls, roomGeometry, wallGaps } from '../geometry/floor';
@@ -203,7 +203,8 @@ function openingCounts(floor: Floor, gaps: Map<string, Gap[]>): Pick<Totals, 'do
       const c = gap.type === 'door' ? doors : gap.type === 'window' ? windows : null;
       if (op && c) {
         c.count++;
-        c.area_m2 += (op.width_mm * op.height_mm) / 1e6;
+        const hole = holeSize(op);
+        c.area_m2 += (hole.width * hole.height) / 1e6;
       }
     }
   return { doors, windows };

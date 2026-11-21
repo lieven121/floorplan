@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { newOpening, newRoom, newWall, type Room } from '../model/schema';
-import { alignDelta, grabOffset, nearestWall, openingGeometry, placeOpeningAt, roomGeometry, snapRoom, snapRotation } from './floor';
-import { dist } from './vec';
+import { holeSize, newOpening, newRoom, newWall, type Room } from '../model/schema';
+import { alignDelta, floorGeometry, grabOffset, nearestWall, openingGeometry, placeOpeningAt, roomGeometry, snapRoom, snapRotation } from './floor';
+import { dist, signedArea } from './vec';
 
 function rect(name: string, w: number, h: number, t: number, x = 0, y = 0): Room {
   const r = newRoom(name, t, { x, y });
@@ -107,12 +107,13 @@ describe('dragging openings', () => {
   it('slides along a wall, stays inside it and can move to another wall', () => {
     const a = rect('A', 4000, 3000, 100);
     const g = roomGeometry(a);
+    const d900 = { ...newOpening(a.id, 'door', 0), width_mm: 900 };
     // Along W1 (top wall), grabbed in the middle of a 900 mm door.
-    expect(placeOpeningAt(g, 900, { x: 2003, y: 30 }, 450)).toEqual({ wallIndex: 0, offset_mm: 1550 });
+    expect(placeOpeningAt(g, d900, { x: 2003, y: 30 }, 450)).toEqual({ wallIndex: 0, offset_mm: 1550 });
     // Past the end: clamped so the door still fits.
-    expect(placeOpeningAt(g, 900, { x: 3800, y: 10 }, 450)).toEqual({ wallIndex: 0, offset_mm: 3100 });
+    expect(placeOpeningAt(g, d900, { x: 3800, y: 10 }, 450)).toEqual({ wallIndex: 0, offset_mm: 3100 });
     // Near the right wall (W2), which runs downwards from C2.
-    expect(placeOpeningAt(g, 900, { x: 3980, y: 1500 }, 450)).toEqual({ wallIndex: 1, offset_mm: 1050 });
+    expect(placeOpeningAt(g, d900, { x: 3980, y: 1500 }, 450)).toEqual({ wallIndex: 1, offset_mm: 1050 });
   });
 
   it('keeps the point you grabbed under the pointer', () => {
@@ -120,5 +121,56 @@ describe('dragging openings', () => {
     const g = roomGeometry(a);
     const door = { ...newOpening(a.id, 'door', 0), offset_mm: 1000, width_mm: 900 };
     expect(grabOffset(g, door, { x: 1300, y: 10 })).toBeCloseTo(300, 6);
+  });
+
+  it('keeps a distance from the end corner measured from there', () => {
+    const a = rect('A', 4000, 3000, 100);
+    const g = roomGeometry(a);
+    const door = { ...newOpening(a.id, 'door', 0), width_mm: 900, from: 'end' as const };
+    expect(placeOpeningAt(g, door, { x: 2003, y: 30 }, 450)).toEqual({ wallIndex: 0, offset_mm: 1550 });
+    expect(placeOpeningAt(g, door, { x: 3000, y: 30 }, 450)).toEqual({ wallIndex: 0, offset_mm: 550 });
+  });
+});
+
+describe('doors and windows', () => {
+  it('is placed from either corner, with or without its frame', () => {
+    const a = rect('A', 4000, 3000, 100);
+    const g = roomGeometry(a);
+    const base = { ...newOpening(a.id, 'window', 0), offset_mm: 500, width_mm: 1000, frame_mm: 70 };
+    expect(openingGeometry(g, base, [g])).toMatchObject({ s0: 500, s1: 1500, fits: true });
+    expect(openingGeometry(g, { ...base, from: 'end' }, [g])).toMatchObject({ s0: 2500, s1: 3500 });
+    // Size inside the frame: the hole is a frame wider on each side.
+    expect(openingGeometry(g, { ...base, sizeWithFrame: false }, [g])).toMatchObject({ s0: 500, s1: 1640 });
+    expect(holeSize({ ...base, sizeWithFrame: false })).toMatchObject({ width: 1140, height: 1340 });
+    expect(holeSize({ ...newOpening(a.id, 'door', 0), height_mm: 2000, frame_mm: 60, sizeWithFrame: false }).height).toBe(2060);
+    expect(openingGeometry(g, { ...base, from: 'end', offset_mm: 3500 }, [g])?.fits).toBe(false);
+  });
+});
+
+describe('wall corners', () => {
+  it('lets the exterior wall run through the corner and the other butt against it', () => {
+    const a = rect('A', 4000, 3000, 300);
+    a.walls[0].kind = 'exterior';
+    a.walls[1].thickness_mm = 100;
+    const g = roomGeometry(a);
+    // Top wall: outside from -300 to 4100; it owns both corner blocks, so its inside face runs on into them.
+    expect(g.outerFace[0].map((p) => [Math.round(p.x), Math.round(p.y)])).toEqual([[-300, -300], [4100, -300]]);
+    expect(g.innerFace[0].map((p) => [Math.round(p.x), Math.round(p.y)])).toEqual([[-300, 0], [4100, 0]]);
+    // Right wall starts at the top wall's inside face.
+    expect(g.outerFace[1][0]).toMatchObject({ x: 4100, y: 0 });
+    // The pieces still cover the whole wall.
+    const area = g.pieces.reduce((s, p) => s + Math.abs(signedArea(p)), 0);
+    expect(area).toBeCloseTo(Math.abs(signedArea(g.outer)) - Math.abs(signedArea(g.inner)), 3);
+  });
+
+  it('gives way where a wall is shared with the next room', () => {
+    const a = rect('A', 4000, 3000, 200);
+    const b = rect('B', 3000, 3000, 200, 4200, 0);
+    const [ga] = floorGeometry([a, b]);
+    // A's top wall goes through its top-right corner; the shared right wall butts.
+    expect(ga.outerFace[0][1]).toMatchObject({ x: 4200, y: -200 });
+    expect(ga.outerFace[1][0]).toMatchObject({ x: 4200, y: 0 });
+    // Alone, equal walls meet on the diagonal.
+    expect(roomGeometry(a).outerFace[1][0]).toMatchObject({ x: 4200, y: -200 });
   });
 });

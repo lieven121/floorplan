@@ -5,10 +5,10 @@
  */
 import { computed } from 'vue';
 import { type Furniture, type LengthUnit, type Opening, type Room, hasWallType } from '../model/schema';
-import { openingGeometry, roomGeometry, toWorld, type RoomGeom } from '../geometry/floor';
+import { floorGeometry, openingGeometry, toWorld, type RoomGeom } from '../geometry/floor';
 import { interiorAngle } from '../geometry/room';
 import { HEADROOM_MM, ceilingCells, ceilingPlanes, hasSlope, headroomPolygon, innerEdges } from '../geometry/ceiling';
-import { add, angleDeg, centroid, cross, mid, rotate, scale, signedArea, sub, unit as unitVec, type Vec } from '../geometry/vec';
+import { add, angleDeg, centroid, cross, dot, mid, rotate, scale, signedArea, sub, unit as unitVec, type Vec } from '../geometry/vec';
 import { formatLength } from '../units';
 import { floorCovering, floorLabel } from '../model/finishes';
 import { PLAN, type Highlight } from './planStyle';
@@ -90,10 +90,11 @@ const ring = (ps: Vec[]) => 'M' + ps.map((p) => `${r1(p.x)} ${r1(p.y)}`).join(' 
 const upright = (deg: number) => (deg > 90 ? deg - 180 : deg < -90 ? deg + 180 : deg);
 const fmtAngle = (a: number) => (Math.abs(a - Math.round(a)) < 0.05 ? `${Math.round(a)}°` : `${a.toFixed(1)}°`);
 
-const geoms = computed(() => props.rooms.map(roomGeometry));
+const geoms = computed(() => floorGeometry(props.rooms));
 const closed = computed(() => geoms.value.filter((g) => g.solved.closed));
 const open = computed(() => geoms.value.filter((g) => !g.solved.closed && g.inner.length > 1));
-const wallPath = (g: RoomGeom) => `${ring(g.outer)} ${ring(g.inner)}`;
+/** All the wall pieces of a room (a straight corner can step from one thickness to another). */
+const wallPath = (g: RoomGeom) => g.pieces.filter((p) => p.length >= 3).map(ring).join(' ');
 
 // ---- wall types ------------------------------------------------------------------
 
@@ -107,9 +108,10 @@ const wallTypeItems = computed(() =>
           if (!hasWallType(w) || !g.thickness[k]) return [];
           const a = g.inner[k];
           const b = g.inner[(k + 1) % n];
-          const ao = g.outer[k];
-          const bo = g.outer[(k + 1) % n];
+          const [ao, bo] = g.outerFace[k];
           const t = g.thickness[k];
+          // The heavy outside line runs on over the corner when the next wall is exterior too.
+          const ext = (i: number) => (g.room.walls[i]?.kind === 'exterior' ? 18 : 0);
           const L = Math.hypot(b.x - a.x, b.y - a.y);
           const hatch: [Vec, Vec][] = [];
           if (w.loadBearing) {
@@ -123,14 +125,36 @@ const wallTypeItems = computed(() =>
             {
               key: `${g.room.id}-t${k}`,
               status: w.status ?? 'existing',
-              quad: pts([a, b, bo, ao]),
+              quad: pts(g.pieces[k]),
               hatch,
-              exterior: w.kind === 'exterior' ? ([ao, bo] as [Vec, Vec]) : null,
+              exterior: w.kind === 'exterior' ? exteriorLine(g, k, ao, bo, ext((k - 1 + n) % n), ext((k + 1) % n)) : [],
             },
           ];
         });
       }),
 );
+
+/** The heavy outside line of an exterior wall, broken where its doors and windows are. */
+function exteriorLine(g: RoomGeom, k: number, ao: Vec, bo: Vec, before: number, after: number): [Vec, Vec][] {
+  const d = g.dirs[k];
+  const L = Math.hypot(bo.x - ao.x, bo.y - ao.y);
+  // Gaps as distances along the outside face.
+  const holes = props.openings
+    .filter((op) => op.roomId === g.room.id && op.wallIndex === k)
+    .flatMap((op) => {
+      const o = openingGeometry(g, op, geoms.value);
+      return o?.fits ? [[dot(sub(o.ao, ao), d), dot(sub(o.bo, ao), d)] as [number, number]] : [];
+    })
+    .sort((x, y) => x[0] - y[0]);
+  const out: [Vec, Vec][] = [];
+  let from = -before;
+  for (const [a, b] of holes) {
+    if (a > from) out.push([add(ao, scale(d, from)), add(ao, scale(d, a))]);
+    from = Math.max(from, b);
+  }
+  if (L + after > from) out.push([add(ao, scale(d, from)), add(ao, scale(d, L + after))]);
+  return out;
+}
 
 // ---- sloped ceilings ----------------------------------------------------------
 
@@ -174,7 +198,51 @@ interface FurnitureItem {
   angle: number;
   labelAngle: number;
   fontSize: number;
+  /** Hangs above the floor (wall cupboard, shelf): drawn dashed, like on building plans. */
+  raised: boolean;
 }
+
+/**
+ * Chimneys, columns, ducts and blocks: solid like the walls. A chimney shows its
+ * flue, a duct is crossed through (the usual sign for a shaft).
+ */
+const fixedItems = computed(() =>
+  props.rooms.flatMap((room) =>
+    (room.fixed ?? []).map((f) => {
+      const angle = f.rotation_deg + room.rotation_deg;
+      const c = toWorld(room, { x: f.x_mm, y: f.y_mm });
+      const box = (w: number, d: number) =>
+        [
+          [-1, -1],
+          [1, -1],
+          [1, 1],
+          [-1, 1],
+        ].map(([sx, sy]) => add(c, rotate({ x: (sx * w) / 2, y: (sy * d) / 2 }, angle)));
+      const outline = box(f.width_mm, f.depth_mm);
+      const flue = Math.min(f.width_mm, f.depth_mm) * 0.45;
+      return {
+        id: f.id,
+        roomId: room.id,
+        kind: f.kind,
+        round: f.shape === 'round',
+        points: pts(outline),
+        c: { x: r1(c.x), y: r1(c.y) },
+        rx: f.width_mm / 2,
+        ry: f.depth_mm / 2,
+        angle: r1(angle),
+        flue: f.kind === 'chimney' ? (f.shape === 'round' ? null : pts(box(flue, flue))) : null,
+        flueR: flue / 2,
+        cross:
+          f.kind === 'duct' && f.shape !== 'round'
+            ? ([
+                [outline[0], outline[2]],
+                [outline[1], outline[3]],
+              ] as [Vec, Vec][])
+            : [],
+      };
+    }),
+  ),
+);
 
 /** Stairs: outline, a line per step and an arrow pointing up. Slopes: outline, arrow and gradient. */
 const stairItems = computed(() =>
@@ -259,6 +327,7 @@ const furnitureItems = computed<FurnitureItem[]>(() =>
         angle: r1(angle),
         labelAngle: r1(upright(f.width_mm >= f.depth_mm ? angle : angle + 90)),
         fontSize: Math.max(60, Math.min(110, Math.min(f.width_mm, f.depth_mm) / 4)),
+        raised: (f.elevation_mm ?? 0) > 0,
       };
     }),
   ),
@@ -278,6 +347,12 @@ interface OpeningItem {
   lines: [Vec, Vec][];
   leaf: [Vec, Vec] | null;
   arc: string;
+  /** Frame profiles at both sides of the gap. */
+  frames: string[];
+  /** Sliding door panels. */
+  panels: { points: string; glass: boolean }[];
+  /** Sliding door: which way the panel opens. */
+  arrow: string;
 }
 
 const openingItems = computed<OpeningItem[]>(() =>
@@ -304,21 +379,53 @@ const openingItems = computed<OpeningItem[]>(() =>
       lines: [],
       leaf: null,
       arc: '',
+      frames: [],
+      panels: [],
+      arrow: '',
     };
+    const width = o.s1 - o.s0;
+    const f = op.type === 'opening' ? 0 : Math.min(Math.max(0, op.frame_mm ?? 0), width / 3);
+    const half = o.depth / 2;
+    /** A point `along` mm into the gap and `across` mm into the wall from its inside face. */
+    const at = (along: number, across: number) => add(add(o.a, scale(o.d, along)), scale(o.n, across));
+    const box = (a0: number, a1: number, c0: number, c1: number) => pts([at(a0, c0), at(a1, c0), at(a1, c1), at(a0, c1)]);
+    const fd = Math.min(o.depth, Math.max(70, f));
+    if (f > 0) item.frames = [box(0, f, half - fd / 2, half + fd / 2), box(width - f, width, half - fd / 2, half + fd / 2)];
     if (op.type === 'window') {
-      const half = o.depth / 2;
       item.lines = [
         [o.a, o.b],
         [o.ao, o.bo],
-        [add(o.a, scale(o.n, half)), add(o.b, scale(o.n, half))],
+        [at(f, half), at(width - f, half)],
       ];
+    } else if (op.type === 'door' && op.operation === 'sliding') {
+      // Two panels side by side in the wall; the one that moves slides over the other towards `hinge`.
+      const clear = width - 2 * f;
+      const pw = clear / 2 + 40;
+      const toEnd = (op.swing?.hinge ?? 'start') === 'end';
+      const glass = !!op.glass;
+      const fixedAt = toEnd ? width - f - pw : f;
+      const movingAt = toEnd ? f : width - f - pw;
+      item.panels = [
+        { points: box(fixedAt, fixedAt + pw, half + 5, half + 45), glass },
+        { points: box(movingAt, movingAt + pw, half - 45, half - 5), glass },
+      ];
+      const y = -Math.min(200, clear / 5);
+      const dir = toEnd ? 1 : -1;
+      const from = at(movingAt + pw / 2 - (dir * pw) / 4, y);
+      const to = at(movingAt + pw / 2 + (dir * pw) / 4, y);
+      const back = unitVec(sub(from, to));
+      const side = scale({ x: -back.y, y: back.x }, 50);
+      const head = add(to, scale(back, 90));
+      item.arrow = `M${r1(from.x)} ${r1(from.y)} L${r1(to.x)} ${r1(to.y)} M${r1(head.x + side.x)} ${r1(head.y + side.y)} L${r1(to.x)} ${r1(to.y)} L${r1(head.x - side.x)} ${r1(head.y - side.y)}`;
     } else if (op.type === 'door') {
       const swing = op.swing ?? { hinge: 'start', side: 'in' };
       const inward = swing.side === 'in';
       const atStart = swing.hinge === 'start';
-      const hinge = atStart ? (inward ? o.a : o.ao) : inward ? o.b : o.bo;
-      const other = atStart ? (inward ? o.b : o.bo) : inward ? o.a : o.ao;
-      const w = op.width_mm;
+      // The leaf hangs inside the frame and is as wide as the clear opening.
+      const face = inward ? 0 : o.depth;
+      const hinge = at(atStart ? f : width - f, face);
+      const other = at(atStart ? width - f : f, face);
+      const w = width - 2 * f;
       const tip = add(hinge, scale(inward ? scale(o.n, -1) : o.n, w));
       const sweep = cross(sub(tip, hinge), sub(other, hinge)) > 0 ? 1 : 0;
       item.leaf = [hinge, tip];
@@ -517,15 +624,19 @@ const activeOpening = computed(() => openingItems.value.find((o) => o.id === hl.
         :ry="f.ry"
         :transform="`rotate(${f.angle} ${f.c.x} ${f.c.y})`"
         :fill="PLAN.furniture"
+        :fill-opacity="f.raised ? 0 : 1"
         :stroke="f.id === hl.furniture ? accent : PLAN.furnitureLine"
         :stroke-width="f.id === hl.furniture ? 35 : 12"
+        :stroke-dasharray="f.raised ? '70 45' : undefined"
       />
       <polygon
         v-else
         :points="f.points"
         :fill="PLAN.furniture"
+        :fill-opacity="f.raised ? 0 : 1"
         :stroke="f.id === hl.furniture ? accent : PLAN.furnitureLine"
         :stroke-width="f.id === hl.furniture ? 35 : 12"
+        :stroke-dasharray="f.raised ? '70 45' : undefined"
       />
       <text
         :x="f.c.x"
@@ -585,9 +696,51 @@ const activeOpening = computed(() => openingItems.value.find((o) => o.id === hl.
       :key="'w' + g.room.id"
       :data-room="g.room.id"
       :d="wallPath(g)"
-      fill-rule="evenodd"
+      fill-rule="nonzero"
       :fill="PLAN.wall"
     />
+
+    <!-- chimneys, columns, ducts and blocks -->
+    <g
+      v-for="f in fixedItems"
+      :key="f.id"
+      :data-room="f.roomId"
+      :data-fixed="editable ? f.id : undefined"
+      :class="{ tap: editable }"
+    >
+      <ellipse
+        v-if="f.round"
+        :cx="f.c.x"
+        :cy="f.c.y"
+        :rx="f.rx"
+        :ry="f.ry"
+        :transform="`rotate(${f.angle} ${f.c.x} ${f.c.y})`"
+        :fill="f.kind === 'duct' ? PLAN.paper : PLAN.wall"
+        :stroke="f.id === hl.fixed ? accent : PLAN.wall"
+        :stroke-width="f.id === hl.fixed ? 35 : 14"
+      />
+      <polygon
+        v-else
+        :points="f.points"
+        :fill="f.kind === 'duct' ? PLAN.paper : PLAN.wall"
+        :stroke="f.id === hl.fixed ? accent : PLAN.wall"
+        :stroke-width="f.id === hl.fixed ? 35 : 14"
+        stroke-linejoin="round"
+      />
+      <polygon v-if="f.flue" :points="f.flue" :fill="PLAN.paper" pointer-events="none" />
+      <circle v-else-if="f.kind === 'chimney'" :cx="f.c.x" :cy="f.c.y" :r="f.flueR" :fill="PLAN.paper" pointer-events="none" />
+      <line
+        v-for="(l, i) in f.cross"
+        :key="i"
+        :x1="r1(l[0].x)"
+        :y1="r1(l[0].y)"
+        :x2="r1(l[1].x)"
+        :y2="r1(l[1].y)"
+        :stroke="PLAN.wall"
+        stroke-width="12"
+        pointer-events="none"
+      />
+    </g>
 
     <!-- wall types: new red, to demolish yellow and dashed, load-bearing hatched, exterior heavier -->
     <g v-for="w in wallTypeItems" :key="w.key" pointer-events="none">
@@ -610,14 +763,15 @@ const activeOpening = computed(() => openingItems.value.find((o) => o.id === hl.
         stroke-width="10"
       />
       <line
-        v-if="w.exterior"
-        :x1="r1(w.exterior[0].x)"
-        :y1="r1(w.exterior[0].y)"
-        :x2="r1(w.exterior[1].x)"
-        :y2="r1(w.exterior[1].y)"
+        v-for="(l, i) in w.exterior"
+        :key="'e' + i"
+        :x1="r1(l[0].x)"
+        :y1="r1(l[0].y)"
+        :x2="r1(l[1].x)"
+        :y2="r1(l[1].y)"
         stroke="#000"
         stroke-width="36"
-        stroke-linecap="square"
+        stroke-linecap="butt"
       />
     </g>
 
@@ -700,6 +854,23 @@ const activeOpening = computed(() => openingItems.value.find((o) => o.id === hl.
         />
         <path :d="o.arc" :fill="editable ? 'rgba(0,0,0,0)' : 'none'" :stroke="PLAN.arc" stroke-width="8" />
       </template>
+      <polygon
+        v-for="(fr, i) in o.frames"
+        :key="'f' + i"
+        :points="fr"
+        :fill="PLAN.paper"
+        :stroke="o.fits ? PLAN.wall : PLAN.warn"
+        stroke-width="8"
+      />
+      <polygon
+        v-for="(p, i) in o.panels"
+        :key="'p' + i"
+        :points="p.points"
+        :fill="p.glass ? PLAN.glass : PLAN.paper"
+        :stroke="o.fits ? PLAN.wall : PLAN.warn"
+        stroke-width="10"
+      />
+      <path v-if="o.arrow" :d="o.arrow" fill="none" :stroke="PLAN.arc" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" />
     </g>
     <polygon
       v-if="activeOpening"

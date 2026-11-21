@@ -9,7 +9,8 @@ export type Selection =
   | { kind: 'opening'; id: string }
   | { kind: 'furniture'; id: string }
   | { kind: 'pin'; id: string }
-  | { kind: 'stair'; id: string };
+  | { kind: 'stair'; id: string }
+  | { kind: 'fixed'; id: string };
 
 /** The type of a wall: kind, load-bearing and renovation status. */
 export type WallType = Pick<Wall, 'kind' | 'loadBearing' | 'status'>;

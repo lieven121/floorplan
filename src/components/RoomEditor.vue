@@ -7,7 +7,7 @@
  * jump to its field, or focus a field to highlight it in the drawing.
  */
 import { HEADROOM_MM, ceilingPlanes, hasSlope, headroomArea_m2 } from '../geometry/ceiling';
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import {
   type Attachment,
   type LengthUnit,
@@ -18,6 +18,7 @@ import {
   type ViewSettings,
   type Wall,
   type WallKind,
+  holeSpan,
   type WallStatus,
   hasWallType,
   fileIdOf,
@@ -25,18 +26,22 @@ import {
   newOpening,
   newPin,
   newStair,
+  newFixed,
+  FIXED_KINDS,
+  type FixedKind,
   newWall,
   uid,
 } from '../model/schema';
-import { FURNITURE_PRESETS, newFurniture } from '../model/furniture';
+import { FURNITURE_PRESETS, furnitureHeight, newFurniture } from '../model/furniture';
 import { FLOOR_COVERINGS, floorCovering } from '../model/finishes';
 import { interiorAngle } from '../geometry/room';
-import { matchingWalls, openingGeometry, roomGeometry } from '../geometry/floor';
+import { matchingWalls, openingGeometry, roomGeometry, wallLength } from '../geometry/floor';
 import { centroid, normDeg } from '../geometry/vec';
 import type { StorageAdapter } from '../storage/types';
 import { deleteUnusedFiles } from '../storage/versions';
 import { ctrlOrCmd, isTyping, useKeydown } from '../composables/useShortcuts';
-import { formatLength } from '../units';
+import { formatLength, parseLength } from '../units';
+import { canRemoveCorner, removeCorner, splitWall } from '../model/walls';
 import AttachmentsPanel from './AttachmentsPanel.vue';
 import NumField from './NumField.vue';
 import RoomPreview from './RoomPreview.vue';
@@ -110,13 +115,14 @@ const nextSize: Record<PlanSize, PlanSize> = { hidden: 'small', small: 'large', 
 const sizeLabel: Record<PlanSize, string> = { hidden: '▾ Show plan', small: '▾ Larger', large: '▴ Hide plan' };
 
 // ---- collapsible cards (layout) ---------------------------------------------------
-type Card = 'room' | 'walls' | 'diagonals' | 'openings' | 'stairs';
+type Card = 'room' | 'walls' | 'diagonals' | 'openings' | 'stairs' | 'fixed';
 const open = reactive<Record<Card, boolean>>({
   room: props.isNew,
   walls: true,
   diagonals: props.room.diagonals.length > 0,
   openings: props.openings.length > 0,
   stairs: (props.room.stairs?.length ?? 0) > 0,
+  fixed: (props.room.fixed?.length ?? 0) > 0,
 });
 const onToggle = (c: Card, e: Event) => (open[c] = (e.target as HTMLDetailsElement).open);
 const sel = ref<Selection | null>(props.initialPin ? { kind: 'pin', id: props.initialPin } : null);
@@ -136,7 +142,9 @@ const cardOf = (s: Selection): Card | null =>
         ? 'openings'
         : s.kind === 'stair'
           ? 'stairs'
-          : null;
+          : s.kind === 'fixed'
+            ? 'fixed'
+            : null;
 watch(sel, (s) => {
   const c = s && cardOf(s);
   if (c) open[c] = true;
@@ -203,6 +211,8 @@ function fieldFor(s: Selection): string {
       return `[data-pin-title="${s.id}"]`;
     case 'stair':
       return `[data-stair-name="${s.id}"]`;
+    case 'fixed':
+      return `[data-fixed-name="${s.id}"]`;
   }
 }
 
@@ -214,7 +224,7 @@ async function onPreviewSelect(s: Selection | null, tapped: boolean) {
   const el = document.querySelector<HTMLElement>(fieldFor(s));
   if (!el) return;
   el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  if (tapped && s.kind !== 'furniture' && s.kind !== 'stair') el.focus({ preventScroll: true });
+  if (tapped && s.kind !== 'furniture' && s.kind !== 'stair' && s.kind !== 'fixed') el.focus({ preventScroll: true });
 }
 
 // ---- room levels ----------------------------------------------------------------
@@ -354,6 +364,29 @@ function removeStair(id: string) {
   if (isActive('stair', id)) sel.value = null;
 }
 
+// ---- chimneys, columns, ducts --------------------------------------------------------
+
+const fixedKind = ref<FixedKind>('chimney');
+
+function addFixed() {
+  const c = solved.value.closed ? centroid(solved.value.points) : { x: 1500, y: 1000 };
+  const f = newFixed(fixedKind.value, Math.round(c.x), Math.round(c.y));
+  (draft.fixed ??= []).push(f);
+  sel.value = { kind: 'fixed', id: f.id };
+}
+
+function moveFixed(id: string, x: number, y: number) {
+  const f = draft.fixed?.find((item) => item.id === id);
+  if (!f) return;
+  f.x_mm = Math.round(x);
+  f.y_mm = Math.round(y);
+}
+
+function removeFixed(id: string) {
+  draft.fixed = (draft.fixed ?? []).filter((f) => f.id !== id);
+  if (isActive('fixed', id)) sel.value = null;
+}
+
 const slopeText = (s: Stair) =>
   s.length_mm > 0 ? `${((s.rise_mm / s.length_mm) * 100).toFixed(1)} % · ${((Math.atan2(s.rise_mm, s.length_mm) * 180) / Math.PI).toFixed(1)}°` : '';
 const stepText = (s: Stair) =>
@@ -412,6 +445,36 @@ function removeWall(i: number) {
   sel.value = null;
 }
 
+/** Splits wall i with a straight corner, so each part can get its own type. */
+function splitAt(i: number) {
+  const w = draft.walls[i];
+  if (!w || !(w.length_mm > 0)) return;
+  const text = prompt(
+    `Split W${i + 1} (${formatLength(w.length_mm, props.unit)} ${props.unit}): distance from C${i + 1} to the new corner, in ${props.unit}`,
+    formatLength(w.length_mm / 2, props.unit),
+  );
+  if (text === null) return;
+  const at = parseLength(text, props.unit);
+  // A focused length field keeps showing what was typed: let it show the new length.
+  (document.activeElement as HTMLElement | null)?.blur();
+  const next = Number.isFinite(at) ? splitWall(draft, ops.value, i, at) : null;
+  if (!next) {
+    alert(`That is not inside W${i + 1}: give a distance between 0 and ${formatLength(w.length_mm, props.unit)} ${props.unit}.`);
+    return;
+  }
+  ops.value = next;
+  sel.value = { kind: 'wall', index: i + 1 };
+}
+
+/** Joins the two walls at straight corner c back into one. */
+function joinAt(c: number) {
+  (document.activeElement as HTMLElement | null)?.blur();
+  const next = removeCorner(draft, ops.value, c);
+  if (!next) return;
+  ops.value = next;
+  sel.value = { kind: 'wall', index: c - 1 };
+}
+
 function copyOpposite() {
   if (draft.walls.length !== 4) return;
   draft.walls[2].length_mm = draft.walls[0].length_mm;
@@ -456,6 +519,15 @@ function moveOpening(id: string, wallIndex: number, offset_mm: number) {
   op.offset_mm = offset_mm;
 }
 
+/** Measure from the other corner, keeping the opening where it is. */
+function setFrom(op: Opening, from: 'start' | 'end') {
+  if ((op.from ?? 'start') === from) return;
+  const L = geom.value.solved.closed ? wallLength(geom.value, op.wallIndex) : wallLen(op.wallIndex);
+  const span = holeSpan(op, L);
+  op.offset_mm = Math.max(0, Math.round(from === 'end' ? L - span.b : span.a));
+  op.from = from === 'end' ? 'end' : undefined;
+}
+
 const fits = (op: Opening) => openingGeometry(geom.value, op, [geom.value])?.fits ?? true;
 const wallLen = (k: number) => draft.walls[k]?.length_mm ?? 0;
 
@@ -492,14 +564,67 @@ function save() {
   // Files removed while editing are deleted now that the change is kept.
   const keep = currentFileIds();
   void deleteUnusedFiles(props.storage, props.projectId, [...originalFileIds].filter((id) => !keep.has(id)));
+  leave();
   emit('save', clone(draft), clone(ops.value), clone(atts.value), clone(patches.value));
 }
 
 function cancel() {
   // Files added while editing are thrown away with the rest of the changes.
   void props.storage.deleteFiles([...currentFileIds()].filter((id) => !originalFileIds.has(id)));
+  leave();
   emit('cancel');
 }
+
+// ---- leaving with unsaved changes ----------------------------------------------
+
+/** Asking whether to save, discard or keep editing. */
+const askLeave = ref(false);
+let left = false;
+
+/** Cancel, Escape and the back button: close, or ask first when something changed. */
+function requestClose() {
+  if (changed()) askLeave.value = true;
+  else cancel();
+}
+
+/**
+ * The editor has its own history entry, so the phone's back button closes it
+ * (and asks first) instead of leaving the plan.
+ */
+const MARK = 'floorplanRoomEditor';
+function onPopState() {
+  if (left) return;
+  if (changed()) {
+    history.pushState({ [MARK]: true }, '');
+    askLeave.value = true;
+  } else {
+    left = true;
+    cancel();
+  }
+}
+
+/** Drops the editor's history entry when it closes some other way. */
+function leave() {
+  if (left) return;
+  left = true;
+  removeEventListener('popstate', onPopState);
+  if ((history.state as Record<string, unknown> | null)?.[MARK]) history.back();
+}
+
+/** Closing or reloading the tab. */
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (!left && changed()) e.preventDefault();
+}
+
+onMounted(() => {
+  history.pushState({ [MARK]: true }, '');
+  addEventListener('popstate', onPopState);
+  addEventListener('beforeunload', onBeforeUnload);
+});
+onBeforeUnmount(() => {
+  leave(); // e.g. the room was deleted
+  removeEventListener('beforeunload', onBeforeUnload);
+});
 
 // ---- keyboard -----------------------------------------------------------------
 
@@ -515,6 +640,8 @@ function nudgeSelected(dx: number, dy: number): boolean {
         ? draft.pins?.find((p) => p.id === s.id)
         : s?.kind === 'stair'
           ? draft.stairs?.find((x) => x.id === s.id)
+          : s?.kind === 'fixed'
+            ? draft.fixed?.find((x) => x.id === s.id)
           : undefined;
   if (!item) return false;
   item.x_mm += dx;
@@ -528,6 +655,7 @@ function removeSelected(): boolean {
   if (s.kind === 'furniture') removeFurniture(s.id);
   else if (s.kind === 'pin') removePin(s.id);
   else if (s.kind === 'stair') removeStair(s.id);
+  else if (s.kind === 'fixed') removeFixed(s.id);
   else if (s.kind === 'opening') ops.value = ops.value.filter((o) => o.id !== s.id);
   else if (s.kind === 'diagonal') draft.diagonals.splice(s.index, 1);
   else return false;
@@ -536,6 +664,13 @@ function removeSelected(): boolean {
 }
 
 useKeydown((e) => {
+  if (askLeave.value) {
+    if (e.key === 'Escape') {
+      askLeave.value = false;
+      e.preventDefault();
+    }
+    return;
+  }
   if (showHelp.value) {
     if (e.key === 'Escape' || e.key === '?') {
       showHelp.value = false;
@@ -553,7 +688,7 @@ useKeydown((e) => {
     if (isTyping(e)) (e.target as HTMLElement).blur();
     else if (placing.value) placing.value = false;
     else if (sel.value) sel.value = null;
-    else if (!changed() || confirm('Discard the changes to this room?')) cancel();
+    else requestClose();
     return;
   }
   if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -579,6 +714,10 @@ useKeydown((e) => {
     const id = sel.value.id;
     const f = draft.furniture?.find((x) => x.id === id);
     if (f) f.rotation_deg = normDeg(f.rotation_deg + 90);
+  } else if (e.key === 'r' && sel.value?.kind === 'fixed') {
+    const id = sel.value.id;
+    const f = draft.fixed?.find((x) => x.id === id);
+    if (f) f.rotation_deg = normDeg(f.rotation_deg + 90);
   } else if (e.key === 'r' && sel.value?.kind === 'stair') {
     const id = sel.value.id;
     const s = draft.stairs?.find((x) => x.id === id);
@@ -591,13 +730,24 @@ useKeydown((e) => {
 <template>
   <div class="sheet editor" :style="accent ? { '--plan-accent': accent } : undefined">
     <header class="topbar">
-      <button class="btn ghost" @click="cancel">Cancel</button>
+      <button class="btn ghost" @click="requestClose">Cancel</button>
       <input v-model="draft.name" class="title-input" aria-label="Room name" />
       <span class="mode-chip" :title="`Editing: ${modeTitle[mode]}`">{{ modeTitle[mode] }}</span>
       <button class="btn ghost kbd-only" aria-label="Keyboard shortcuts (?)" title="Keyboard shortcuts (?)" @click="showHelp = true">⌨</button>
       <button class="btn primary" title="Save (Ctrl+S)" @click="save">Save</button>
     </header>
     <ShortcutsHelp v-if="showHelp" context="room" @close="showHelp = false" />
+    <div v-if="askLeave" class="backdrop" @click.self="askLeave = false">
+      <div class="dialog leave-dialog" role="alertdialog" aria-labelledby="leave-title">
+        <h2 id="leave-title">Save the changes to {{ draft.name || 'this room' }}?</h2>
+        <p>You changed this room. If you leave without saving, the changes are lost.</p>
+        <div class="row-actions end">
+          <button class="btn" @click="askLeave = false">Keep editing</button>
+          <button class="btn danger" @click="cancel">Discard</button>
+          <button class="btn primary" @click="save">Save</button>
+        </div>
+      </div>
+    </div>
 
     <div class="editor-main" :class="`plan-${planSize}`">
       <div v-show="planSize !== 'hidden'" class="preview">
@@ -616,6 +766,7 @@ useKeydown((e) => {
           @move-furniture="moveFurniture"
           @move-pin="movePin"
           @move-stair="moveStair"
+          @move-fixed="moveFixed"
           @move-opening="moveOpening"
           @place="placePin"
         />
@@ -698,7 +849,9 @@ useKeydown((e) => {
           <summary><h2>Walls</h2><small>{{ n }} walls</small></summary>
           <p class="hint">
             Measure the inside faces, going clockwise from corner C1. Corners you leave alone are a 90° guess that
-            adjusts to fit. Type an angle to fix it; a corner that sticks into the room is 270°.
+            adjusts to fit. Type an angle to fix it; a corner that sticks into the room is 270°. Where one wall
+            changes type halfway (interior to exterior, another thickness), select it and split it: that adds a
+            straight 180° corner.
           </p>
           <div
             v-for="(w, i) in draft.walls"
@@ -781,6 +934,12 @@ useKeydown((e) => {
               </span>
             </div>
             <small v-if="rowNote(i)" class="residual">{{ rowNote(i) }}</small>
+            <div v-if="wallRowActive(i)" class="wall-actions">
+              <button class="btn small" :disabled="!(w.length_mm > 0)" @click="splitAt(i)">✂ Split W{{ i + 1 }}</button>
+              <button v-if="canRemoveCorner(draft, (i + 1) % n)" class="btn small" @click="joinAt(i + 1)">
+                Remove corner C{{ i + 2 }} (join W{{ i + 1 }} and W{{ i + 2 }})
+              </button>
+            </div>
           </div>
           <div class="row-actions">
             <button class="btn" @click="addWall">+ Wall</button>
@@ -832,8 +991,9 @@ useKeydown((e) => {
         <details class="card" :open="open.openings" @toggle="onToggle('openings', $event)">
           <summary><h2>Doors &amp; windows</h2><small>{{ ops.length || 'none' }}</small></summary>
           <p class="hint">
-            Distance is measured from the wall's start corner to the near edge of the frame opening. Select a wall
-            first to add it there.
+            The distance runs from the corner you choose to the near edge of the hole in the wall (the outside of
+            the frame). Width and height can be the outside of the frame or the clear opening inside it. Select a
+            wall first to add it there.
           </p>
           <div
             v-for="(o, i) in ops"
@@ -859,24 +1019,68 @@ useKeydown((e) => {
                 <option v-for="k in n" :key="k" :value="k - 1">W{{ k }}</option>
               </select>
             </label>
-            <NumField v-model="o.offset_mm" :kind="unit" :label="`From C${o.wallIndex + 1}`" :data-op="o.id" />
+            <label class="field">
+              <span class="field-label">Measured from</span>
+              <select :value="o.from ?? 'start'" @change="setFrom(o, ($event.target as HTMLSelectElement).value as 'start' | 'end')">
+                <option value="start">C{{ o.wallIndex + 1 }}</option>
+                <option value="end">C{{ ((o.wallIndex + 1) % n) + 1 }}</option>
+              </select>
+            </label>
+            <NumField
+              v-model="o.offset_mm"
+              :kind="unit"
+              :label="`Distance from C${o.from === 'end' ? ((o.wallIndex + 1) % n) + 1 : o.wallIndex + 1}`"
+              :data-op="o.id"
+            />
             <NumField v-model="o.width_mm" :kind="unit" label="Width" />
             <NumField v-model="o.height_mm" :kind="unit" label="Height" />
             <NumField v-if="o.type === 'window'" v-model="o.sill_mm" :kind="unit" label="Sill" />
+            <template v-if="o.type !== 'opening'">
+              <NumField
+                :model-value="o.frame_mm ?? 0"
+                kind="mm"
+                label="Frame (mm)"
+                @update:model-value="(v: number) => (o.frame_mm = v > 0 ? v : undefined)"
+              />
+              <label class="field">
+                <span class="field-label">Size is</span>
+                <select
+                  :value="o.sizeWithFrame === false ? 'clear' : 'frame'"
+                  @change="o.sizeWithFrame = ($event.target as HTMLSelectElement).value === 'clear' ? false : undefined"
+                >
+                  <option value="frame">With frame</option>
+                  <option value="clear">Inside frame</option>
+                </select>
+              </label>
+            </template>
             <template v-if="o.type === 'door' && o.swing">
               <label class="field">
-                <span class="field-label">Hinge</span>
+                <span class="field-label">Door</span>
+                <select
+                  :value="o.operation ?? 'hinged'"
+                  @change="o.operation = ($event.target as HTMLSelectElement).value === 'sliding' ? 'sliding' : undefined"
+                >
+                  <option value="hinged">Hinged</option>
+                  <option value="sliding">Sliding</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">{{ o.operation === 'sliding' ? 'Slides open to' : 'Hinge' }}</span>
                 <select v-model="o.swing.hinge">
                   <option value="start">C{{ o.wallIndex + 1 }} side</option>
                   <option value="end">C{{ ((o.wallIndex + 1) % n) + 1 }} side</option>
                 </select>
               </label>
-              <label class="field">
+              <label v-if="o.operation !== 'sliding'" class="field">
                 <span class="field-label">Opens</span>
                 <select v-model="o.swing.side">
                   <option value="in">Into room</option>
                   <option value="out">Out of room</option>
                 </select>
+              </label>
+              <label class="check opening-check">
+                <input type="checkbox" :checked="!!o.glass" @change="o.glass = ($event.target as HTMLInputElement).checked || undefined" />
+                Glass
               </label>
             </template>
             <button class="btn icon" aria-label="Remove" @click="ops.splice(i, 1), (sel = null)">✕</button>
@@ -920,6 +1124,59 @@ useKeydown((e) => {
           <div class="row-actions">
             <button class="btn" @click="addStair('stairs')">+ Stairs</button>
             <button class="btn" @click="addStair('ramp')">+ Slope</button>
+          </div>
+        </details>
+
+        <details class="card" :open="open.fixed" @toggle="onToggle('fixed', $event)">
+          <summary><h2>Chimneys &amp; columns</h2><small>{{ draft.fixed?.length || 'none' }}</small></summary>
+          <p class="hint">
+            Solid parts of the building in the room: a chimney breast, a column, a duct, a block of masonry. X and Y
+            are its centre from C1, along W1 and into the room. Drag it in the drawing. Height empty: up to the
+            ceiling.
+          </p>
+          <div
+            v-for="f in draft.fixed ?? []"
+            :key="f.id"
+            class="furniture-row"
+            :class="{ active: isActive('fixed', f.id) }"
+            @focusin="sel = { kind: 'fixed', id: f.id }"
+          >
+            <label class="field name">
+              <span class="field-label">Name</span>
+              <input v-model="f.name" :data-fixed-name="f.id" />
+            </label>
+            <label class="field">
+              <span class="field-label">Kind</span>
+              <select v-model="f.kind">
+                <option v-for="k in FIXED_KINDS" :key="k.kind" :value="k.kind">{{ k.name }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Shape</span>
+              <select v-model="f.shape">
+                <option value="rect">Rectangle</option>
+                <option value="round">Round</option>
+              </select>
+            </label>
+            <NumField v-model="f.width_mm" :kind="unit" label="Width" />
+            <NumField v-model="f.depth_mm" :kind="unit" label="Depth" />
+            <NumField v-model="f.x_mm" :kind="unit" label="X" />
+            <NumField v-model="f.y_mm" :kind="unit" label="Y" />
+            <NumField
+              :model-value="f.height_mm ?? 0"
+              :kind="unit"
+              label="Height"
+              @update:model-value="(v: number) => (f.height_mm = v > 0 ? v : undefined)"
+            />
+            <NumField v-model="f.rotation_deg" kind="deg" label="Turn °" />
+            <button class="btn icon" aria-label="Turn 90°" @click="f.rotation_deg = normDeg(f.rotation_deg + 90)">⟳</button>
+            <button class="btn icon danger" aria-label="Remove" @click="removeFixed(f.id)">✕</button>
+          </div>
+          <div class="row-actions">
+            <select v-model="fixedKind" aria-label="Kind to add">
+              <option v-for="k in FIXED_KINDS" :key="k.kind" :value="k.kind">{{ k.name }}</option>
+            </select>
+            <button class="btn" @click="addFixed">+ Add</button>
           </div>
         </details>
 
@@ -1012,6 +1269,18 @@ useKeydown((e) => {
             </label>
             <NumField v-model="f.width_mm" :kind="unit" label="Width" />
             <NumField v-model="f.depth_mm" :kind="unit" label="Depth" />
+            <NumField
+              :model-value="furnitureHeight(f)"
+              :kind="unit"
+              label="Height"
+              @update:model-value="(v: number) => (f.height_mm = v > 0 ? v : undefined)"
+            />
+            <NumField
+              :model-value="f.elevation_mm ?? 0"
+              :kind="unit"
+              label="Above floor"
+              @update:model-value="(v: number) => (f.elevation_mm = v ? v : undefined)"
+            />
             <NumField v-model="f.x_mm" :kind="unit" label="X" />
             <NumField v-model="f.y_mm" :kind="unit" label="Y" />
             <NumField v-model="f.rotation_deg" kind="deg" label="Turn °" />

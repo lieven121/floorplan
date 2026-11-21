@@ -375,7 +375,7 @@ function onPress(e: PointerEvent, world: Vec): PressHandler | null {
     const grab = grabOffset(g, op, world);
     return {
       move(w) {
-        const at = placeOpeningAt(g, op.width_mm, w, grab);
+        const at = placeOpeningAt(g, op, w, grab);
         if (at) opDrag.value = { id: op.id, ...at };
       },
       end(moved) {

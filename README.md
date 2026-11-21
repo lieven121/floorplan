@@ -12,9 +12,10 @@ A self-hosted web app for measuring and documenting your house. Type in the wall
 - **Rooms from walls.** Go round the room clockwise and type each wall's length. Corners are 90° until you type an angle (a corner that sticks into the room is 270°).
 - **Measurements never add up exactly.** The app spreads the error over the walls and shows how far off each one was. Diagonals (corner to corner) let it find the real corner angles.
 - **Rooms into a floor.** Drag a room next to another one: it snaps to the shared wall and keeps the wall thickness between them. Turn rooms, line them up with a wall, lock them in place.
-- **Doors, windows and openings**, placed by their distance from a corner, with the way a door swings. Drag them along the wall.
+- **Doors, windows and openings**, placed by their distance from either corner, with the frame thickness and whether the size you measured includes the frame. Hinged doors with the way they swing, or sliding (glass) doors. Drag them along the wall.
 - **Several floors**, with the floor below or above drawn through as an outline.
 - **Wall heights, floor levels, stairs and slopes** (ramps).
+- **Chimneys, columns, ducts and masonry blocks:** solid parts of the building in a room, drawn like walls and up to the ceiling in 3D.
 - **Sloped ceilings** for attic rooms: knee wall height and roof pitch per wall. The plan shows the line where the free height drops below the usable headroom (1.80 m by default, adjustable), and the usable floor area.
 - **Measuring tape** on the floor view for distances and areas.
 
@@ -24,7 +25,7 @@ A self-hosted web app for measuring and documenting your house. Type in the wall
 
 ### Renovation
 - **Room finishes:** floor covering (tiles, laminate, parquet, vinyl, carpet, concrete, screed, or your own text), wall and ceiling finish, and whether the room has skirting boards. The plan can tint rooms by their floor covering.
-- **Wall types:** exterior or interior, load-bearing, and existing / new / to demolish. New walls are drawn red and walls to demolish yellow and dashed (the usual Belgian convention), load-bearing walls are hatched. Exports get a legend. A wall between two rooms can be set on both sides at once.
+- **Wall types:** exterior or interior, load-bearing, and existing / new / to demolish. New walls are drawn red and walls to demolish yellow and dashed (the usual Belgian convention), load-bearing walls are hatched. Exports get a legend. A wall between two rooms can be set on both sides at once. Where a wall changes type halfway, split it with a straight 180° corner; remove the corner to join it again.
 - **Versions:** save the plan as a named version ("Current", "After renovation"), look at an older version read-only, restore it (the current state is kept as an automatic version first), or start a separate plan from it.
 
 | Versions | Looking at an older version |
@@ -51,7 +52,7 @@ The house in 3D: walls with their door and window openings, sloped ceilings, sta
 
 ### Notes, furniture and export
 - **Notes and photos:** numbered note dots anywhere in a room, each with text, photos and documents (photos need the server).
-- **Furniture** from a list of common sizes, dragged and turned in the room.
+- **Furniture** from a list of common sizes, dragged and turned in the room, with its height and how high above the floor it hangs (wall cupboards and shelves are dashed on the plan).
 - **Export:** PDF to scale (1:50, 1:100, … on A4 or A3, with a scale bar to check with a ruler), PNG, JPG, SVG, and the whole project as one JSON file (with the photos) to import again later. Choose what each export shows.
 - **Keyboard shortcuts** on a desktop (press `?`), undo and redo.
 

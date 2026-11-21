@@ -7,6 +7,8 @@ import {
   type Attachment,
   type Diagonal,
   type Floor,
+  type FixedElement,
+  type FixedKind,
   type Furniture,
   type Layer,
   type Opening,
@@ -191,6 +193,23 @@ function normalizeRoom(r: Obj): Room {
       }),
     );
   }
+  if (Array.isArray(r.fixed)) {
+    const kinds = ['chimney', 'column', 'duct', 'block'];
+    room.fixed = r.fixed.filter(isObj).map(
+      (f): FixedElement => ({
+        id: str(f.id, uid()),
+        kind: kinds.includes(f.kind as string) ? (f.kind as FixedKind) : 'block',
+        name: str(f.name, 'Block'),
+        shape: f.shape === 'round' ? 'round' : 'rect',
+        x_mm: num(f.x_mm, 0),
+        y_mm: num(f.y_mm, 0),
+        width_mm: num(f.width_mm, 500),
+        depth_mm: num(f.depth_mm, 500),
+        rotation_deg: num(f.rotation_deg, 0),
+        ...(typeof f.height_mm === 'number' && f.height_mm > 0 ? { height_mm: f.height_mm } : {}),
+      }),
+    );
+  }
   if (Array.isArray(r.furniture)) {
     room.furniture = r.furniture.filter(isObj).map(
       (f): Furniture => ({
@@ -203,6 +222,8 @@ function normalizeRoom(r: Obj): Room {
         width_mm: num(f.width_mm, 1000),
         depth_mm: num(f.depth_mm, 600),
         rotation_deg: num(f.rotation_deg, 0),
+        ...(typeof f.height_mm === 'number' && f.height_mm > 0 ? { height_mm: f.height_mm } : {}),
+        ...(typeof f.elevation_mm === 'number' && f.elevation_mm !== 0 ? { elevation_mm: f.elevation_mm } : {}),
       }),
     );
   }
@@ -229,5 +250,10 @@ function normalizeOpening(o: Obj): Opening {
   } else if (type === 'door') {
     op.swing = { hinge: 'start', side: 'in' };
   }
+  if (o.from === 'end') op.from = 'end';
+  if (typeof o.frame_mm === 'number' && o.frame_mm > 0) op.frame_mm = o.frame_mm;
+  if (o.sizeWithFrame === false) op.sizeWithFrame = false;
+  if (type === 'door' && o.operation === 'sliding') op.operation = 'sliding';
+  if (type === 'door' && o.glass === true) op.glass = true;
   return op;
 }
