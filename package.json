@@ -1,7 +1,7 @@
 {
   "name": "floorplan",
   "private": true,
-  "version": "0.9.2",
+  "version": "0.9.3",
   "type": "module",
   "description": "Self-hosted floor plan app: type in laser-meter readings, get a to-scale plan.",
   "license": "MIT",
