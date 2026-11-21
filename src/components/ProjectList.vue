@@ -7,6 +7,7 @@ import type { RestAdapter } from '../storage/rest';
 import { uploadToAccount } from '../storage/upload';
 import { allFileIds, deleteUnusedFiles, fileIdsOf } from '../storage/versions';
 import { auth, login, logout } from '../auth/session';
+import { countDrafts, listDrafts } from '../storage/drafts';
 
 const props = defineProps<{ local: StorageAdapter; rest: RestAdapter }>();
 const emit = defineEmits<{ open: [id: string, inAccount: boolean] }>();
@@ -15,6 +16,9 @@ const device = ref<ProjectSummary[]>([]);
 const account = ref<ProjectSummary[]>([]);
 const error = ref('');
 const busy = ref('');
+/** Plans with changes on this device that never reached the account. */
+const drafts = ref(new Set<string>());
+const draftCount = ref(0);
 const fileInput = ref<HTMLInputElement>();
 
 const loggedIn = computed(() => !!auth.me);
@@ -34,6 +38,12 @@ async function refresh() {
     account.value = loggedIn.value ? await props.rest.list() : [];
   } catch (e) {
     error.value = `Could not load your account: ${e instanceof Error ? e.message : e}`;
+  }
+  try {
+    drafts.value = new Set(auth.me ? (await listDrafts(auth.me.id)).map((d) => d.projectId) : []);
+    draftCount.value = await countDrafts();
+  } catch {
+    // no IndexedDB: nothing kept
   }
 }
 onMounted(refresh);
@@ -190,13 +200,16 @@ const when = (s: string) => new Date(s).toLocaleString();
       <p v-if="auth.error" class="warn">{{ auth.error }}</p>
       <p v-if="error" class="warn">{{ error }}</p>
       <p v-if="busy" class="hint">{{ busy }}</p>
+      <p v-if="!loggedIn && auth.server && draftCount" class="warn">
+        This device has changes that were not saved to your account yet. Log in, then open the plan to choose which version to keep.
+      </p>
 
       <template v-if="loggedIn">
         <h2 class="list-title">In your account</h2>
         <ul v-if="mine.length" class="list">
           <li v-for="p in mine" :key="p.id" class="list-row">
             <button class="list-item" @click="emit('open', p.id, true)">
-              <span>{{ p.name }}</span>
+              <span>{{ p.name }} <span v-if="drafts.has(p.id)" class="role-tag unsaved">unsaved changes on this device</span></span>
               <small>Changed {{ when(p.updatedAt) }}</small>
             </button>
             <button class="btn icon danger" :aria-label="`Delete ${p.name}`" @click="remove(p, true)">🗑</button>
@@ -209,7 +222,7 @@ const when = (s: string) => new Date(s).toLocaleString();
           <ul class="list">
             <li v-for="p in shared" :key="p.id" class="list-row">
               <button class="list-item" @click="emit('open', p.id, true)">
-                <span>{{ p.name }} <span class="role-tag" :class="p.role">{{ p.role === 'viewer' ? 'view only' : 'can edit' }}</span></span>
+                <span>{{ p.name }} <span v-if="drafts.has(p.id)" class="role-tag unsaved">unsaved changes on this device</span> <span class="role-tag" :class="p.role">{{ p.role === 'viewer' ? 'view only' : 'can edit' }}</span></span>
                 <small>{{ p.ownerName }} · changed {{ when(p.updatedAt) }}</small>
               </button>
             </li>

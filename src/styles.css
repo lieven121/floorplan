@@ -1336,6 +1336,13 @@ input.guessed {
   background: color-mix(in srgb, var(--ok) 18%, transparent);
   color: var(--ok);
 }
+.role-tag.unsaved {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.draft-dialog {
+  max-width: 480px;
+}
 .share-add {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

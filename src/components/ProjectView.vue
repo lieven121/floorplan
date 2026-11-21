@@ -16,6 +16,8 @@ import {
 import { ConflictError, type Role, type StorageAdapter, type VersionSummary } from '../storage/types';
 import { RestAdapter } from '../storage/rest';
 import { deleteUnusedFiles } from '../storage/versions';
+import { type Draft, deleteDraft, getDraft, putDraft, samePlan } from '../storage/drafts';
+import { auth } from '../auth/session';
 import { alignDelta, boundsOf, rotateRoomAbout, roomGeometry, snapRoom } from '../geometry/floor';
 import { centroid, normDeg, type Vec } from '../geometry/vec';
 import { HEADROOM_MM } from '../geometry/ceiling';
@@ -324,7 +326,80 @@ onMounted(async () => {
   project.value = p;
   floorId.value = p.floors[0]?.id ?? '';
   snapshot();
+  await checkDraft(p);
 });
+
+// ---- changes kept on this device ---------------------------------------------------
+
+/** Plans in your account: who the drafts on this device belong to. */
+const draftUser = props.storage instanceof RestAdapter ? auth.me?.id : undefined;
+/** Changes on this device that never reached the server: you choose which version to keep. */
+const draftChoice = ref<{ draft: Draft; server: Project } | null>(null);
+const draftBusy = ref(false);
+let draftTimer: ReturnType<typeof setTimeout> | undefined;
+/** Counts edits, so a save that finished does not drop a draft with newer edits. */
+let edits = 0;
+
+async function checkDraft(server: Project) {
+  if (!draftUser || viewOnly.value) return;
+  const d = await getDraft(draftUser, server.id).catch(() => undefined);
+  if (!d) return;
+  prepare(d.project);
+  if (samePlan(d.project, server)) void deleteDraft(draftUser, server.id).catch(() => undefined);
+  else draftChoice.value = { draft: d, server: JSON.parse(JSON.stringify(server)) as Project };
+}
+
+function writeDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = undefined;
+  if (!draftUser || !project.value || readonly.value) return Promise.resolve();
+  return putDraft(draftUser, toRaw(project.value)).catch((e) => console.warn('Could not keep the changes on this device', e));
+}
+
+const when = (iso: string) => new Date(iso).toLocaleString();
+
+/** Keep the version from this device. The one in your account is kept as an automatic version. */
+async function useDraft() {
+  const c = draftChoice.value;
+  if (!c || !draftUser) return;
+  draftBusy.value = true;
+  try {
+    await props.storage.putVersion(c.server.id, 'In your account, before the changes from this device', c.server, true);
+    showPlan(prepare({ ...c.draft.project, id: c.server.id, createdAt: c.server.createdAt }));
+    resetHistory();
+    draftChoice.value = null;
+    clearTimeout(timer);
+    saveState.value = 'saving';
+    await saveNow();
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e));
+  } finally {
+    draftBusy.value = false;
+  }
+}
+
+/** Keep the version in your account. The one from this device is kept as an automatic version. */
+async function useServer() {
+  const c = draftChoice.value;
+  if (!c || !draftUser) return;
+  draftBusy.value = true;
+  try {
+    await props.storage.putVersion(c.server.id, 'Changes from this device that were not saved', c.draft.project, true);
+    await deleteDraft(draftUser, c.server.id);
+    draftChoice.value = null;
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e));
+  } finally {
+    draftBusy.value = false;
+  }
+}
+
+// A page that is closed or reloaded may not run the save timer: keep the changes first.
+const onPageHide = () => {
+  if (draftTimer) void writeDraft();
+};
+addEventListener('pagehide', onPageHide);
+onBeforeUnmount(() => removeEventListener('pagehide', onPageHide));
 
 /** Shared with you as "view only": nothing can be changed or saved. */
 const role = ref<Role | undefined>();
@@ -479,11 +554,15 @@ The plan as it is now is saved first as an automatic version â€œBefore restoreâ€
 // Save shortly after every change.
 let timer: ReturnType<typeof setTimeout> | undefined;
 async function saveNow() {
-  if (!project.value || readonly.value) return;
+  if (!project.value || readonly.value || draftChoice.value) return;
+  const n = edits;
   try {
+    if (draftUser) await writeDraft();
     await props.storage.put({ ...toRaw(project.value), updatedAt: new Date().toISOString() });
     saveState.value = 'saved';
     saveError.value = '';
+    // The server has it now; newer edits keep their draft.
+    if (draftUser && n === edits && !draftTimer) await deleteDraft(draftUser, project.value.id).catch(() => undefined);
   } catch (e) {
     saveState.value = 'error';
     saveError.value = e instanceof ConflictError ? 'changed elsewhere: reload!' : 'could not save!';
@@ -494,9 +573,14 @@ watch(
   project,
   (_now, before) => {
     if (!before || readonly.value) return;
+    edits++;
     saveState.value = 'saving';
     clearTimeout(timer);
     timer = setTimeout(saveNow, 400);
+    if (draftUser) {
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(writeDraft, 150);
+    }
     if (!restoring) {
       clearTimeout(historyTimer);
       historyTimer = setTimeout(snapshot, 350);
@@ -1306,6 +1390,27 @@ function setHeight(e: Event) {
       @restore="restoreVersion"
       @close="showVersions = false"
     />
+
+    <div v-if="draftChoice" class="backdrop">
+      <div class="dialog draft-dialog">
+        <h2>Changes that were not saved</h2>
+        <p>
+          This device has changes to <b>{{ project.name }}</b> from {{ when(draftChoice.draft.savedAt) }} that never
+          reached your account, for example because you were logged out.
+        </p>
+        <p class="hint">
+          Version in your account: last saved {{ when(draftChoice.server.updatedAt) }}. The version you don't pick is
+          kept as an automatic version, so you can still open it later under Versions.
+        </p>
+        <p v-if="draftChoice.server.updatedAt > draftChoice.draft.savedAt" class="warn">
+          The version in your account was saved after these changes, maybe on another device.
+        </p>
+        <div class="row-actions end">
+          <button class="btn" :disabled="draftBusy" @click="useServer">Use the version in your account</button>
+          <button class="btn primary" :disabled="draftBusy" @click="useDraft">Use the changes on this device</button>
+        </div>
+      </div>
+    </div>
 
     <QuantitiesView v-if="showQuantities" :project="project" @close="showQuantities = false" />
 
