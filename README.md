@@ -14,7 +14,7 @@ A self-hosted web app for measuring and documenting your house. Type in the wall
 - **Rooms into a floor.** Drag a room next to another one: it snaps to the shared wall and keeps the wall thickness between them. Turn rooms, line them up with a wall, lock them in place.
 - **Doors, windows and openings**, placed by their distance from either corner, with the frame thickness and whether the size you measured includes the frame. Hinged doors with the way they swing, or sliding (glass) doors. Drag them along the wall.
 - **Several floors**, with the floor below or above drawn through as an outline.
-- **Wall heights, floor levels, stairs and slopes** (ramps).
+- **Wall heights, floor levels, stairs and slopes** (ramps), going up or down. In 3D, stairs are just the steps, or solid if you tick it.
 - **Chimneys, columns, ducts and masonry blocks:** solid parts of the building in a room, drawn like walls and up to the ceiling in 3D.
 - **Sloped ceilings** for attic rooms: knee wall height and roof pitch per wall. The plan shows the line where the free height drops below the usable headroom (1.80 m by default, adjustable), and the usable floor area.
 - **Measuring tape** on the floor view for distances and areas.

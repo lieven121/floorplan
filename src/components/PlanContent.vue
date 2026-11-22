@@ -246,7 +246,7 @@ const fixedItems = computed(() =>
   ),
 );
 
-/** Stairs: outline, a line per step and an arrow pointing up. Slopes: outline, arrow and gradient. */
+/** Stairs: outline, a line per step and an arrow the way it goes (up or down). Slopes: outline, arrow and gradient. */
 const stairItems = computed(() =>
   props.rooms.flatMap((room) =>
     (room.stairs ?? []).map((s) => {
@@ -279,8 +279,8 @@ const stairItems = computed(() =>
         arrow: `M${r1(tail.x)} ${r1(tail.y)} L${r1(head.x)} ${r1(head.y)} M${r1(wing1.x)} ${r1(wing1.y)} L${r1(head.x)} ${r1(head.y)} L${r1(wing2.x)} ${r1(wing2.y)}`,
         label:
           s.kind === 'stairs'
-            ? `up ${formatLength(s.rise_mm, 'cm')} cm · ${s.steps} steps`
-            : `up ${slope.toFixed(1)} %`,
+            ? `${s.down ? 'down' : 'up'} ${formatLength(s.rise_mm, 'cm')} cm · ${s.steps} steps`
+            : `${s.down ? 'down' : 'up'} ${slope.toFixed(1)} %`,
         lx: r1(labelPos.x),
         ly: r1(labelPos.y),
         labelAngle: r1(upright(angle)),

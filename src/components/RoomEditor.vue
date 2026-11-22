@@ -402,6 +402,18 @@ function removeFixed(id: string) {
 
 const slopeText = (s: Stair) =>
   s.length_mm > 0 ? `${((s.rise_mm / s.length_mm) * 100).toFixed(1)} % · ${((Math.atan2(s.rise_mm, s.length_mm) * 180) / Math.PI).toFixed(1)}°` : '';
+/** Ticked: set the flag; unticked: leave it out of the file. */
+function setStairFlag(s: Stair, key: 'down' | 'solid', e: Event) {
+  if ((e.target as HTMLInputElement).checked) s[key] = true;
+  else delete s[key];
+}
+
+/** Angle field emptied: back to the 90° guess, which the solver may adjust. */
+function resetAngle(w: Wall) {
+  w.angle_deg = 90;
+  w.angle_measured = false;
+}
+
 const stepText = (s: Stair) =>
   s.steps > 0 ? `each step ${formatLength(s.rise_mm / s.steps, 'cm')} cm high, ${formatLength(s.length_mm / s.steps, 'cm')} cm deep` : '';
 
@@ -1073,8 +1085,11 @@ useKeydown((e) => {
               :class="{ guessed: !isAngleMeasured(w) }"
               :label="`Angle at C${((i + 1) % n) + 1}${isAngleMeasured(w) ? '' : ' (guess)'}`"
               :data-angle="i"
+              clearable
+              title="Leave empty to go back to the 90° guess"
               @focusin.stop="sel = { kind: 'corner', index: (i + 1) % n }"
               @update:model-value="w.angle_measured = true"
+              @clear="resetAngle(w)"
             />
             <NumField v-model="w.thickness_mm" kind="cm" label="Wall (cm)" />
             <NumField
@@ -1298,8 +1313,9 @@ useKeydown((e) => {
         <details class="card" :open="open.stairs" @toggle="onToggle('stairs', $event)">
           <summary><h2>Stairs &amp; slopes</h2><small>{{ draft.stairs?.length || 'none' }}</small></summary>
           <p class="hint">
-            The arrow points up. Drag it in the drawing; Turn changes its direction. Rise is the total height it
-            climbs.
+            The arrow points the way it goes, up or down. Drag it in the drawing; Turn changes its direction. Rise is
+            the total height it climbs. Going down starts at this room's floor and leaves an opening in it. In 3D,
+            stairs are just the steps unless you tick Solid.
           </p>
           <div
             v-for="s in draft.stairs ?? []"
@@ -1319,6 +1335,16 @@ useKeydown((e) => {
             <NumField v-model="s.rotation_deg" kind="deg" label="Turn °" />
             <button class="btn icon" aria-label="Turn 90°" @click="s.rotation_deg = normDeg(s.rotation_deg + 90)">⟳</button>
             <button class="btn icon danger" aria-label="Remove" title="Remove" @click="removeStair(s.id)"><AppIcon name="trash" /></button>
+            <div class="row-extra">
+              <label class="check">
+                <input type="checkbox" :checked="!!s.down" @change="setStairFlag(s, 'down', $event)" />
+                Goes down
+              </label>
+              <label v-if="s.kind === 'stairs'" class="check">
+                <input type="checkbox" :checked="!!s.solid" @change="setStairFlag(s, 'solid', $event)" />
+                Solid (filled in below the steps)
+              </label>
+            </div>
             <small class="residual">{{ s.kind === 'stairs' ? stepText(s) : slopeText(s) }}</small>
           </div>
           <div class="row-actions">

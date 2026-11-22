@@ -178,6 +178,8 @@ function normalizeRoom(r: Obj): Room {
         rotation_deg: num(s.rotation_deg, 0),
         rise_mm: num(s.rise_mm, 0),
         steps: Math.max(0, Math.round(num(s.steps, 0))),
+        ...(s.down === true ? { down: true } : {}),
+        ...(s.solid === true ? { solid: true } : {}),
       }),
     );
   }

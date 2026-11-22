@@ -11,6 +11,7 @@ import { furnitureHeight } from '../model/furniture';
 import { type Plane, ceilingCells, ceilingPlanes, wallProfile } from '../geometry/ceiling';
 import { type Gap, type RoomGeom, floorGeometry, toWorld, wallGaps } from '../geometry/floor';
 import { type Vec, add, dot, rotate, scale, sub } from '../geometry/vec';
+import { inPolygon } from '../electrical/rooms';
 
 type P3 = [number, number, number];
 const M = 0.001;
@@ -111,7 +112,13 @@ function buildRoom(g: RoomGeom, gapsOf: (k: number) => Gap[], y0: number, opts: 
   const planes: Plane[] = ceilingPlanes(g.inner, room.walls, H);
   const up = (p: Vec, h: number): P3 => [p.x * M, (base + h) * M, p.y * M];
 
-  out.floor.poly(g.inner, (p) => up(p, 0));
+  // Stairs going down: an opening in the floor where they are.
+  const wells = (room.stairs ?? []).filter((s) => s.down).map((s) => stairOutline(room, s));
+  out.floor.poly(
+    g.inner,
+    (p) => up(p, 0),
+    wells.filter((w) => w.every((p) => inPolygon(p, g.inner))),
+  );
 
   if (opts.ceilings !== 'hidden')
     for (const cell of ceilingCells(g.inner, planes))
@@ -183,8 +190,9 @@ function buildRoom(g: RoomGeom, gapsOf: (k: number) => Gap[], y0: number, opts: 
       return top;
     };
 
-    const topIn = t > 0 ? face(I, si, Li) : face(A, 0, L);
+    // A wall without thickness is only a boundary between rooms (open plan): nothing to build.
     if (t <= 0) continue;
+    const topIn = face(I, si, Li);
     const topOut = face(O, s0, Lo);
     const pin = (tt: number, h: number) => up(add(A, scale(d, tt)), h);
     const pout = (tt: number, h: number) => up(add(add(A, scale(d, tt)), scale(nrm, t)), h);
@@ -216,14 +224,39 @@ function buildRoom(g: RoomGeom, gapsOf: (k: number) => Gap[], y0: number, opts: 
   }
 }
 
+/** Corners of a stair's footprint in plan. */
+function stairOutline(room: Room, s: Stair): Vec[] {
+  const angle = s.rotation_deg + room.rotation_deg;
+  const c = toWorld(room, { x: s.x_mm, y: s.y_mm });
+  return [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ].map(([x, y]) => add(c, rotate({ x: (x * s.length_mm) / 2, y: (y * s.width_mm) / 2 }, angle)));
+}
+
+/** How thick a tread is when only the steps are built. */
+export const TREAD_MM = 50;
+
+/**
+ * Stairs as their steps (or filled in down to the bottom when `solid`), a slope
+ * as a filled block of steps. Going down, the first step is one rise below the floor.
+ */
 function buildStair(room: Room, s: Stair, base: number, out: Tris) {
   const angle = s.rotation_deg + room.rotation_deg;
   const c = toWorld(room, { x: s.x_mm, y: s.y_mm });
   const steps = s.kind === 'stairs' ? Math.max(1, s.steps) : 16;
   const run = s.length_mm / steps;
+  const rise = s.rise_mm / steps;
+  const sign = s.down ? -1 : 1;
+  const bottom = s.down ? base - s.rise_mm : base;
+  const filled = s.kind === 'ramp' || s.solid;
   for (let i = 0; i < steps; i++) {
     const centre = add(c, rotate({ x: -s.length_mm / 2 + (i + 0.5) * run, y: 0 }, angle));
-    out.box(centre, run, s.width_mm, angle, base, base + ((i + 1) * s.rise_mm) / steps);
+    const top = base + sign * (i + 1) * rise;
+    const y0 = filled ? bottom : Math.max(bottom, top - Math.min(TREAD_MM, Math.abs(rise)));
+    if (top - y0 > 0.5) out.box(centre, run, s.width_mm, angle, y0, top);
   }
 }
 

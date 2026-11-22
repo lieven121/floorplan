@@ -9,8 +9,14 @@ import { formatInput, parseLength, parseNumber } from '../units';
 
 defineOptions({ inheritAttrs: false });
 
-const props = defineProps<{ modelValue: number; kind: LengthUnit | 'deg'; label?: string }>();
-const emit = defineEmits<{ 'update:modelValue': [value: number] }>();
+const props = defineProps<{
+  modelValue: number;
+  kind: LengthUnit | 'deg';
+  label?: string;
+  /** Emptying the field emits `clear` (go back to the default) instead of setting 0. */
+  clearable?: boolean;
+}>();
+const emit = defineEmits<{ 'update:modelValue': [value: number]; clear: [] }>();
 
 const format = (v: number) => (props.kind === 'deg' ? String(Number(v.toFixed(2))) : formatInput(v, props.kind));
 const parse = (t: string) => (props.kind === 'deg' ? parseNumber(t) : parseLength(t, props.kind));
@@ -28,6 +34,11 @@ watch(
 
 function onInput(e: Event) {
   text.value = (e.target as HTMLInputElement).value;
+  if (props.clearable && text.value.trim() === '') {
+    invalid.value = false;
+    emit('clear');
+    return;
+  }
   const v = parse(text.value);
   invalid.value = !Number.isFinite(v);
   if (!invalid.value) emit('update:modelValue', v);

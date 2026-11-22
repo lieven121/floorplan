@@ -115,8 +115,9 @@ export function newPin(x_mm: number, y_mm: number): NotePin {
 }
 
 /**
- * Stairs or a slope (ramp), in room coordinates. It goes UP along its length,
- * in the direction of `rotation_deg` (0 = along W1).
+ * Stairs or a slope (ramp), in room coordinates. It goes up (or, with `down`,
+ * down from this room's floor) along its length, in the direction of
+ * `rotation_deg` (0 = along W1).
  */
 export interface Stair {
   id: Id;
@@ -132,6 +133,10 @@ export interface Stair {
   rise_mm: number;
   /** Stairs only. */
   steps: number;
+  /** Goes down from this room's floor (to a basement or a lower level) instead of up. */
+  down?: boolean;
+  /** Stairs only: filled in down to the bottom, instead of just the steps. */
+  solid?: boolean;
 }
 
 export function newStair(kind: Stair['kind'], x_mm: number, y_mm: number): Stair {
